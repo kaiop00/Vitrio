@@ -1,0 +1,20 @@
+{
+  "name": "vitrio-functions",
+  "private": true,
+  "main": "lib/index.js",
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "deploy": "firebase deploy --only functions",
+    "create:master": "node scripts/create-master.mjs"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.1",
+    "firebase-functions": "^6.1.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

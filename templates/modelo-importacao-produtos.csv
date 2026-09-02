@@ -1,0 +1,3 @@
+nome;sku;preco;preco_anterior;estoque;categoria;tags;ativo;destaque
+Camiseta Básica;CAM-001;59,90;79,90;20;Camisetas;algodão|básico|unissex;sim;sim
+Boné Clássico;BON-001;49,90;;12;Acessórios;boné|casual;sim;nao

@@ -1,0 +1,6 @@
+import { useEffect,useState } from 'react';
+import { collection,limit,onSnapshot,orderBy,query } from 'firebase/firestore';
+import { History } from 'lucide-react';
+import { db } from '../../lib/firebase'; import { AuditLog } from '../../types/models';
+function date(v:any){try{return v?.toDate?.().toLocaleString('pt-BR')||'—'}catch{return '—'}}
+export function AdminAuditPage(){const [logs,setLogs]=useState<AuditLog[]>([]);useEffect(()=>onSnapshot(query(collection(db,'auditLogs'),orderBy('createdAt','desc'),limit(100)),s=>setLogs(s.docs.map(d=>({id:d.id,...d.data()} as AuditLog)))),[]);return <><div className="page-head"><div><h1>Auditoria da plataforma</h1><p>Últimas ações registradas no Vitrio.</p></div><span className="status-chip"><History size={14}/> {logs.length}</span></div><div className="table-card"><table><thead><tr><th>Data</th><th>Usuário</th><th>Ação</th><th>Loja</th><th>Descrição</th></tr></thead><tbody>{logs.map(l=><tr key={l.id}><td>{date(l.createdAt)}</td><td>{l.userName||l.userId}</td><td><code>{l.action}</code></td><td>{l.storeId}</td><td>{l.description}</td></tr>)}</tbody></table>{logs.length===0&&<div className="empty-admin">Nenhum registro ainda.</div>}</div></>}

@@ -1,0 +1,1 @@
+export function PlaceholderPage({title}:{title:string}){return <><div className="page-head"><div><h1>{title}</h1><p>Módulo preparado para a próxima etapa do Vitrio.</p></div></div><div className="panel"><p>A estrutura multi-loja já está pronta para evoluirmos este módulo sem misturar dados entre clientes.</p></div></>}

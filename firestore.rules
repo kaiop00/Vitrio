@@ -1,0 +1,121 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function profile() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function isAdmin() { return signedIn() && profile().role == 'admin' && profile().active == true; }
+    function isMerchantOf(storeId) { return signedIn() && profile().role == 'merchant' && profile().active == true && profile().storeId == storeId; }
+    function isStoreOwnerOf(storeId) { return isMerchantOf(storeId) && storeEnabled(storeId) && (profile().isStoreOwner == true || !('permissions' in profile())); }
+    function storeEnabled(storeId) {
+      let s = get(/databases/$(database)/documents/stores/$(storeId)).data;
+      return s.active == true && s.subscriptionStatus != 'past_due' && s.subscriptionStatus != 'suspended' && s.subscriptionStatus != 'cancelled' && (s.subscriptionStatus != 'trial' || !('trialEndsAt' in s) || s.trialEndsAt > request.time);
+    }
+    function can(storeId, permission) {
+      return isMerchantOf(storeId) && storeEnabled(storeId) && (profile().isStoreOwner == true || !('permissions' in profile()) || profile().permissions.hasAny([permission]));
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin() || isStoreOwnerOf(resource.data.storeId));
+      allow create: if isAdmin();
+      allow update: if isAdmin() || (
+        isStoreOwnerOf(resource.data.storeId) &&
+        resource.data.isStoreOwner != true &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active'])
+      );
+      allow delete: if isAdmin();
+    }
+
+    match /stores/{storeId} {
+      allow read: if resource.data.active == true || isAdmin() || isMerchantOf(storeId);
+      allow create: if isAdmin();
+      allow update: if isAdmin() || (
+        (can(storeId,'store_settings') || can(storeId,'checkout_settings')) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'active','plan','subscriptionStatus','trialEndsAt','subscriptionEndsAt',
+          'paymentProviderConnected','mercadoPagoUserId','mercadoPagoPublicKey','mercadoPagoAccessToken',
+          'mercadoPagoRefreshToken','paymentProviderConnectedAt'
+        ])
+      );
+      allow delete: if isAdmin();
+    }
+
+    match /products/{productId} {
+      allow read: if resource.data.active == true || isAdmin() || isMerchantOf(resource.data.storeId);
+      allow create: if isAdmin() || can(request.resource.data.storeId,'products');
+      allow update: if isAdmin() || can(resource.data.storeId,'products') || can(resource.data.storeId,'inventory');
+      allow delete: if isAdmin() || can(resource.data.storeId,'products');
+    }
+
+    match /categories/{id} {
+      allow read: if resource.data.active == true || isAdmin() || isMerchantOf(resource.data.storeId);
+      allow create: if isAdmin() || can(request.resource.data.storeId,'categories');
+      allow update, delete: if isAdmin() || can(resource.data.storeId,'categories');
+    }
+
+    match /orders/{id} {
+      allow create: if false;
+      allow read: if isAdmin() || can(resource.data.storeId,'orders') || can(resource.data.storeId,'returns');
+      allow update, delete: if isAdmin();
+    }
+
+    match /inventoryMovements/{id} {
+      allow read: if isAdmin() || can(resource.data.storeId,'inventory') || can(resource.data.storeId,'audit');
+      allow create: if isAdmin() || can(request.resource.data.storeId,'inventory');
+      allow update, delete: if isAdmin();
+    }
+
+    match /cashRegisters/{id} {
+      allow read: if isAdmin() || can(resource.data.storeId,'cash');
+      allow create: if isAdmin() || can(request.resource.data.storeId,'cash');
+      allow update: if isAdmin() || can(resource.data.storeId,'cash');
+      allow delete: if isAdmin();
+    }
+
+    match /cashMovements/{id} {
+      allow read: if isAdmin() || can(resource.data.storeId,'cash');
+      allow create: if isAdmin() || can(request.resource.data.storeId,'cash');
+      allow update, delete: if isAdmin();
+    }
+
+    match /flashOffers/{id} {
+      allow read: if resource.data.active == true || isAdmin() || can(resource.data.storeId,'products');
+      allow create: if isAdmin() || can(request.resource.data.storeId,'products');
+      allow update, delete: if isAdmin() || can(resource.data.storeId,'products');
+    }
+
+    match /deliveryZones/{id} {
+      allow read: if resource.data.active == true || isAdmin() || can(resource.data.storeId,'delivery');
+      allow create: if isAdmin() || can(request.resource.data.storeId,'delivery');
+      allow update, delete: if isAdmin() || can(resource.data.storeId,'delivery');
+    }
+
+    match /coupons/{id} {
+      allow read: if isAdmin() || can(resource.data.storeId,'coupons');
+      allow create: if isAdmin() || can(request.resource.data.storeId,'coupons');
+      allow update, delete: if isAdmin() || can(resource.data.storeId,'coupons');
+    }
+
+    match /customers/{id} {
+      allow read: if isAdmin() || can(resource.data.storeId,'customers');
+      allow write: if isAdmin();
+    }
+
+    match /returns/{id} {
+      allow read: if isAdmin() || can(resource.data.storeId,'returns');
+      allow write: if false;
+    }
+
+    match /auditLogs/{id} {
+      allow read: if isAdmin() || can(resource.data.storeId,'audit');
+      allow write: if false;
+    }
+
+    match /payments/{id} {
+      allow read: if isAdmin() || can(resource.data.storeId,'payments');
+      allow write: if false;
+    }
+
+    match /storePaymentSecrets/{storeId} { allow read, write: if false; }
+    match /mercadoPagoOauthStates/{state} { allow read, write: if false; }
+  }
+}

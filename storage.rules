@@ -1,0 +1,14 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() { return request.auth != null; }
+    function profile() { return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data; }
+    function isAdmin() { return signedIn() && profile().role == 'admin' && profile().active == true; }
+    function isMerchantOf(storeId) { return signedIn() && profile().role == 'merchant' && profile().active == true && profile().storeId == storeId; }
+    function storeEnabled(storeId) { let s = firestore.get(/databases/(default)/documents/stores/$(storeId)).data; return s.active == true && s.subscriptionStatus != 'past_due' && s.subscriptionStatus != 'suspended' && s.subscriptionStatus != 'cancelled' && (s.subscriptionStatus != 'trial' || !('trialEndsAt' in s) || s.trialEndsAt > request.time); }
+    match /stores/{storeId}/{allPaths=**} {
+      allow read: if true;
+      allow write: if isAdmin() || (isMerchantOf(storeId) && storeEnabled(storeId));
+    }
+  }
+}

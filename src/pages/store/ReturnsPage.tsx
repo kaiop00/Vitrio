@@ -1,0 +1,18 @@
+import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { db, functions } from '../../lib/firebase';
+import { useAuth } from '../../contexts/AuthContext';
+import { Order, ReturnRecord } from '../../types/models';
+const money=(v:number)=>v.toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+
+export function ReturnsPage(){
+ const {profile}=useAuth();const [orders,setOrders]=useState<Order[]>([]),[returns,setReturns]=useState<ReturnRecord[]>([]);
+ const [orderId,setOrderId]=useState(''),[type,setType]=useState<'return'|'exchange'>('return'),[reason,setReason]=useState(''),[qtys,setQtys]=useState<Record<string,number>>({}),[message,setMessage]=useState('');
+ useEffect(()=>{if(!profile?.storeId)return;const a=onSnapshot(query(collection(db,'orders'),where('storeId','==',profile.storeId)),s=>setOrders(s.docs.map(d=>({id:d.id,...d.data()} as Order)).filter(o=>o.status!=='cancelled')));const b=onSnapshot(query(collection(db,'returns'),where('storeId','==',profile.storeId)),s=>setReturns(s.docs.map(d=>({id:d.id,...d.data()} as ReturnRecord)).sort((x,y)=>(y.createdAt?.seconds||0)-(x.createdAt?.seconds||0))));return()=>{a();b();}},[profile?.storeId]);
+ const order=useMemo(()=>orders.find(o=>o.id===orderId),[orders,orderId]);
+ async function submit(e:FormEvent){e.preventDefault();if(!order)return;const items=order.items.map(i=>({productId:i.productId,quantity:Number(qtys[i.productId]||0)})).filter(i=>i.quantity>0);if(!items.length){setMessage('Selecione ao menos um item.');return;}try{const fn=httpsCallable(functions,'registerReturn');const res:any=await fn({orderId:order.id,type,reason,items});setMessage(`${type==='exchange'?'Troca':'Devolução'} registrada: ${money(Number(res.data.total||0))}.`);setQtys({});setReason('');}catch(e:any){setMessage(e?.message?.replace('FirebaseError: ','')||'Não foi possível registrar.');}}
+ return <><div className="page-head"><div><h1>Trocas e devoluções</h1><p>Registre devoluções parciais ou totais com retorno automático ao estoque.</p></div></div>
+ <div className="panel"><form onSubmit={submit} className="form-grid"><label>Pedido<select value={orderId} onChange={e=>{setOrderId(e.target.value);setQtys({})}} required><option value="">Selecione...</option>{orders.map(o=><option value={o.id} key={o.id}>#{o.id.slice(0,6).toUpperCase()} · {o.customerName} · {money(o.total)}</option>)}</select></label><label>Operação<select value={type} onChange={e=>setType(e.target.value as any)}><option value="return">Devolução</option><option value="exchange">Troca</option></select></label>{order&&<div className="span-2 return-items"><strong>Itens</strong>{order.items.map(i=><label key={i.productId}>{i.name}<input type="number" min="0" max={i.quantity} value={qtys[i.productId]||0} onChange={e=>setQtys({...qtys,[i.productId]:Number(e.target.value)})}/><small>Máximo: {i.quantity}</small></label>)}</div>}<label className="span-2">Motivo<textarea value={reason} onChange={e=>setReason(e.target.value)} placeholder="Motivo da troca/devolução"/></label><button className="primary-btn">Registrar</button>{message&&<p>{message}</p>}</form></div>
+ <div className="panel"><h2>Histórico</h2>{returns.length===0?<p className="muted">Nenhum registro.</p>:returns.map(r=><div className="mini-row" key={r.id}><div><strong>{r.type==='exchange'?'Troca':'Devolução'} · #{r.orderId.slice(0,6).toUpperCase()}</strong><small>{r.items.map(i=>`${i.quantity}x ${i.name}`).join(', ')}{r.reason?` · ${r.reason}`:''}</small></div><b>{money(r.total)}</b></div>)}</div></>;
+}
