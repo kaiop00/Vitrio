@@ -2,21 +2,22 @@ import { useEffect, useMemo, useState } from 'react';
 import { Search, X, ArrowRight, Store, Package, ShoppingCart, Users, Settings, BarChart3, Boxes, TicketPercent, WalletCards, Bell, Building2, ShieldCheck, QrCode } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { Permission } from '../types/models';
 
-type Command = { label:string; description:string; to:string; icon:any; keywords?:string };
+type Command = { label:string; description:string; to:string; icon:any; keywords?:string; permission?:Permission };
 
 const merchantCommands:Command[] = [
-  {label:'Dashboard',description:'Resumo da operação',to:'/painel',icon:BarChart3,keywords:'inicio visão geral'},
-  {label:'Novo produto',description:'Cadastrar ou editar catálogo',to:'/painel/produtos',icon:Package,keywords:'produto catálogo cadastro'},
-  {label:'Pedidos',description:'Acompanhar vendas e status',to:'/painel/pedidos',icon:ShoppingCart,keywords:'venda pedido cliente'},
-  {label:'Estoque',description:'Conferir saldos e reposição',to:'/painel/estoque',icon:Boxes,keywords:'inventario reposicao'},
-  {label:'Clientes',description:'Base de compradores',to:'/painel/clientes',icon:Users,keywords:'crm comprador'},
-  {label:'Cupons',description:'Criar descontos e campanhas',to:'/painel/cupons',icon:TicketPercent,keywords:'desconto promoção'},
-  {label:'Caixa',description:'Abrir e fechar caixa',to:'/painel/caixa',icon:WalletCards,keywords:'financeiro movimento'},
+  {label:'Dashboard',description:'Resumo da operação',to:'/painel',icon:BarChart3,keywords:'inicio visão geral',permission:'dashboard'},
+  {label:'Novo produto',description:'Cadastrar ou editar catálogo',to:'/painel/produtos',icon:Package,keywords:'produto catálogo cadastro',permission:'products'},
+  {label:'Pedidos',description:'Acompanhar vendas e status',to:'/painel/pedidos',icon:ShoppingCart,keywords:'venda pedido cliente',permission:'orders'},
+  {label:'Estoque',description:'Conferir saldos e reposição',to:'/painel/estoque',icon:Boxes,keywords:'inventario reposicao',permission:'inventory'},
+  {label:'Clientes',description:'Base de compradores',to:'/painel/clientes',icon:Users,keywords:'crm comprador',permission:'customers'},
+  {label:'Cupons',description:'Criar descontos e campanhas',to:'/painel/cupons',icon:TicketPercent,keywords:'desconto promoção',permission:'coupons'},
+  {label:'Caixa',description:'Abrir e fechar caixa',to:'/painel/caixa',icon:WalletCards,keywords:'financeiro movimento',permission:'cash'},
   {label:'Atividade',description:'Pedidos, estoque e alterações recentes',to:'/painel/atividade',icon:Bell,keywords:'atividade histórico alertas'},
-  {label:'Minha loja',description:'Logo, dados e identidade visual',to:'/painel/minha-loja',icon:Store,keywords:'configurar loja vitrine'},
+  {label:'Minha loja',description:'Logo, dados e identidade visual',to:'/painel/minha-loja',icon:Store,keywords:'configurar loja vitrine',permission:'store_settings'},
   {label:'Divulgação',description:'Link e QR Code da vitrine',to:'/painel/divulgacao',icon:QrCode,keywords:'qrcode qr code compartilhar link marketing'},
-  {label:'Configurações',description:'Checkout, entrega e pagamentos',to:'/painel/configuracoes',icon:Settings,keywords:'checkout pagamento entrega'},
+  {label:'Configurações',description:'Checkout, entrega e pagamentos',to:'/painel/configuracoes',icon:Settings,keywords:'checkout pagamento entrega',permission:'checkout_settings'},
 ];
 
 const adminCommands:Command[] = [
@@ -33,7 +34,7 @@ export function CommandPalette({open,onClose}:{open:boolean;onClose:()=>void}){
   const [q,setQ]=useState('');
   useEffect(()=>{if(open)setQ('')},[open]);
   useEffect(()=>{const fn=(e:KeyboardEvent)=>{if(e.key==='Escape')onClose()};window.addEventListener('keydown',fn);return()=>window.removeEventListener('keydown',fn)},[onClose]);
-  const commands=profile?.role==='admin'?adminCommands:merchantCommands;
+  const commands=profile?.role==='admin'?adminCommands:(profile?.isStoreOwner===true?merchantCommands:merchantCommands.filter(c=>c.permission && Array.isArray(profile?.permissions) && profile.permissions.includes(c.permission)));
   const filtered=useMemo(()=>{const needle=q.trim().toLowerCase();if(!needle)return commands;return commands.filter(c=>`${c.label} ${c.description} ${c.keywords||''}`.toLowerCase().includes(needle))},[q,commands]);
   if(!open)return null;
   return <div className="command-backdrop" onMouseDown={onClose}><div className="command-dialog" onMouseDown={e=>e.stopPropagation()}>

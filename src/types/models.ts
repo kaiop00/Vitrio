@@ -25,7 +25,7 @@ export interface CashRegister { id:string; storeId:string; openedBy:string; stat
 export interface CashMovement { id:string; storeId:string; cashRegisterId:string; type:'income'|'expense'; amount:number; description:string; createdAt?:any; createdBy:string; }
 
 
-export type SubscriptionPlan = 'starter' | 'pro' | 'business';
+export type SubscriptionPlan = 'monthly';
 export type SubscriptionStatus = 'trial' | 'active' | 'past_due' | 'suspended' | 'cancelled';
 
 export type StoreSubscription = {
@@ -53,7 +53,7 @@ export interface Customer {
 }
 
 export interface ReturnRecord {
-  id:string; storeId:string; orderId:string; type:'return'|'exchange'; items:{productId:string;name:string;quantity:number;unitPrice:number;total:number}[]; total:number; reason:string; status:'received'|'refunded'|'exchanged'; createdBy:string; createdAt?:any;
+  id:string; storeId:string; orderId:string; orderShortId?:string; customerName?:string; customerPhone?:string; paymentMethod?:string; type:'return'|'exchange'; items:{orderItemIndex?:number;productId:string;name:string;variantId?:string;variantName?:string;quantity:number;unitPrice:number;total:number}[]; total:number; reason:string; status:'received'|'refunded'|'exchanged'; stockRestored?:boolean; financialApplied?:boolean; cashRegisterId?:string|null; createdBy:string; createdByName?:string; createdAt?:any;
 }
 export interface AuditLog {
   id:string; storeId:string; userId:string; userName?:string; action:string; entity:string; entityId?:string; description:string; createdAt?:any;

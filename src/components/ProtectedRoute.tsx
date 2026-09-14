@@ -10,7 +10,7 @@ export function ProtectedRoute({roles,permission,children}:{roles?:Role[];permis
  if(!profile)return <div className="screen-center">Seu usuário ainda não possui perfil no Vitrio.</div>;
  if(!profile.active)return <div className="screen-center">Acesso desativado. Fale com o administrador.</div>;
  if(roles&&!roles.includes(profile.role))return <Navigate to={profile.role==='admin'?'/admin':'/painel'} replace/>;
- if(permission&&profile.role==='merchant'&&profile.isStoreOwner!==true&&profile.permissions!==undefined&&!(profile.permissions||[]).includes(permission))return <Navigate to="/painel" replace/>;
+ if(permission && profile.role==='merchant' && profile.isStoreOwner!==true && (!Array.isArray(profile.permissions) || !profile.permissions.includes(permission))) return <Navigate to="/painel" replace/>;
  // A página de assinatura continua acessível mesmo quando a loja está suspensa,
  // para o lojista entender o motivo do bloqueio e consultar sua situação.
  if(profile.role==='merchant' && location.pathname==='/painel/assinatura') return <>{children}</>;

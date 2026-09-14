@@ -1,52 +1,29 @@
 import { useEffect,useMemo,useState } from 'react';
-import { collection,deleteField,doc,onSnapshot,serverTimestamp,Timestamp,updateDoc } from 'firebase/firestore';
+import { collection,deleteField,doc,onSnapshot,serverTimestamp,Timestamp,updateDoc,writeBatch } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { ExternalLink,Headphones,Search,ShieldCheck,ShieldOff } from 'lucide-react';
+import { BadgeCheck, Ban, Building2, Clock3, ExternalLink, Headphones, Search, ShieldCheck, ShieldOff, WalletCards } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { db,functions } from '../../lib/firebase';
 import { useUi } from '../../contexts/UiContext';
-import { Store,SubscriptionPlan,SubscriptionStatus } from '../../types/models';
+import { Store,SubscriptionStatus } from '../../types/models';
 const labels:Record<string,string>={trial:'Em teste',active:'Ativa',past_due:'Pagamento pendente',suspended:'Bloqueada',cancelled:'Cancelada'};
-function date(v:any){try{return v?.toDate?.().toLocaleDateString('pt-BR')||'—'}catch{const d=new Date(v);return Number.isNaN(d.getTime())?'—':d.toLocaleDateString('pt-BR')}}
-function isoDate(v:any){try{const d=v?.toDate?.()||new Date(v);return Number.isNaN(d.getTime())?'':d.toISOString().slice(0,10)}catch{return ''}}
+type PaymentRequest={id:string;storeId:string;storeName?:string;amount?:number;plan?:string;status?:string;createdAt?:any};
+function toDate(v:any){try{if(!v)return null;const d=v?.toDate?.()||new Date(v);return Number.isNaN(d.getTime())?null:d}catch{return null}}
+function isoDate(v:any){const d=toDate(v);return d?d.toISOString().slice(0,10):''}
+function money(v:number){return Number(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}
+function isTrialExpired(s:Store){const d=toDate(s.trialEndsAt);return s.subscriptionStatus==='trial'&&!!d&&d.getTime()<Date.now()}
 export function StoresPage(){
- const [stores,setStores]=useState<Store[]>([]),[search,setSearch]=useState(''),[status,setStatus]=useState('all'),[busy,setBusy]=useState('');
+ const [stores,setStores]=useState<Store[]>([]),[payments,setPayments]=useState<PaymentRequest[]>([]),[search,setSearch]=useState(''),[status,setStatus]=useState('all'),[busy,setBusy]=useState('');
  const {toast}=useUi();
- useEffect(()=>onSnapshot(collection(db,'stores'),s=>setStores(s.docs.map(d=>({id:d.id,...d.data()} as Store)).sort((a,b)=>a.name.localeCompare(b.name)))),[]);
- async function patch(id:string,data:Record<string,unknown>){
-  if(busy===id)return;
-  setBusy(id);
-  try{
-    // Mantém a Cloud Function como caminho principal para registrar auditoria.
-    const fn=httpsCallable(functions,'adminUpdateStoreAccess');
-    await fn({storeId:id,...data});
-    toast('Situação da loja atualizada.');
-  }catch(err:any){
-    // Fallback administrativo: evita que uma Function antiga/não publicada impeça o Master de operar.
-    // As regras do Firestore continuam exigindo role=admin e active=true para esta escrita.
-    try{
-      const fallbackData:Record<string,unknown>={...data,updatedAt:serverTimestamp()};
-      for(const field of ['trialEndsAt','subscriptionEndsAt']){
-        if(Object.prototype.hasOwnProperty.call(fallbackData,field)){
-          const value=fallbackData[field];
-          if(value===null||value==='') fallbackData[field]=deleteField();
-          else if(typeof value==='string'){
-            const parsed=new Date(`${value}T23:59:59`);
-            if(!Number.isNaN(parsed.getTime())) fallbackData[field]=Timestamp.fromDate(parsed);
-          }
-        }
-      }
-      await updateDoc(doc(db,'stores',id),fallbackData);
-      toast('Situação da loja atualizada.');
-    }catch(fallbackErr:any){
-      const message=String(fallbackErr?.message||err?.message||'Não foi possível atualizar a loja.').replace('FirebaseError: ','');
-      toast(message,'error');
-    }
-  }finally{setBusy('')}
- }
- const filtered=useMemo(()=>stores.filter(s=>(status==='all'||s.subscriptionStatus===status)&&`${s.name} ${s.slug} ${s.ownerEmail||''}`.toLowerCase().includes(search.toLowerCase())),[stores,search,status]);
- return <><div className="page-head"><div><h1>Clientes e lojas</h1><p>Gerencie contrato, teste, plano e acesso sem interferir no login pessoal do lojista.</p></div></div>
- <div className="metric-grid"><div className="metric-card"><span>Total</span><strong>{stores.length}</strong></div><div className="metric-card"><span>Em teste</span><strong>{stores.filter(s=>s.subscriptionStatus==='trial').length}</strong></div><div className="metric-card"><span>Ativas</span><strong>{stores.filter(s=>s.subscriptionStatus==='active').length}</strong></div><div className="metric-card"><span>Bloqueadas</span><strong>{stores.filter(s=>!s.active||['suspended','cancelled'].includes(s.subscriptionStatus||'')).length}</strong></div></div>
- <div className="panel admin-toolbar"><div className="search-box"><Search size={17}/><input placeholder="Buscar loja, link ou e-mail..." value={search} onChange={e=>setSearch(e.target.value)}/></div><select value={status} onChange={e=>setStatus(e.target.value)}><option value="all">Todas as situações</option>{Object.entries(labels).map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div>
- <div className="table-card"><table><thead><tr><th>Cliente / loja</th><th>Vitrine</th><th>Plano</th><th>Assinatura</th><th>Teste até</th><th>Ações</th></tr></thead><tbody>{filtered.map(s=><tr key={s.id}><td><strong>{s.name}</strong><small className="table-sub">{s.ownerEmail||'Lojista cadastrado'}</small></td><td><a className="table-link" href={`/loja/${s.slug}`} target="_blank" rel="noreferrer">/{s.slug}<ExternalLink size={13}/></a></td><td><select disabled={busy===s.id} value={s.plan||'starter'} onChange={e=>patch(s.id,{plan:e.target.value as SubscriptionPlan})}><option value="starter">Starter</option><option value="pro">Pro</option><option value="business">Business</option></select></td><td><select disabled={busy===s.id} value={s.subscriptionStatus||'trial'} onChange={e=>patch(s.id,{subscriptionStatus:e.target.value as SubscriptionStatus,active:!['suspended','cancelled'].includes(e.target.value)})}>{Object.entries(labels).map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></td><td><input className="date-input" type="date" value={isoDate(s.trialEndsAt)} onChange={e=>patch(s.id,{trialEndsAt:e.target.value})}/></td><td><div className="table-actions"><Link title="Abrir suporte" className="icon-btn" to={`/admin/suporte/${s.id}`}><Headphones size={16}/></Link><button disabled={busy===s.id} className={s.active?'secondary-btn compact':'primary-btn compact'} onClick={()=>patch(s.id,{active:!s.active,subscriptionStatus:!s.active?'active':'suspended'})}>{s.active?<><ShieldOff size={15}/>Bloquear</>:<><ShieldCheck size={15}/>Liberar</>}</button></div></td></tr>)}</tbody></table>{filtered.length===0&&<div className="empty-admin">Nenhuma loja encontrada.</div>}</div></>;
+ useEffect(()=>{const a=onSnapshot(collection(db,'stores'),s=>setStores(s.docs.map(d=>({id:d.id,...d.data()} as Store)).sort((a,b)=>a.name.localeCompare(b.name))));const b=onSnapshot(collection(db,'subscriptionPayments'),s=>setPayments(s.docs.map(d=>({id:d.id,...d.data()} as PaymentRequest)).filter(p=>p.status==='awaiting_review').sort((x,y)=>(y.createdAt?.seconds||0)-(x.createdAt?.seconds||0))));return()=>{a();b();}},[]);
+ async function patch(id:string,data:Record<string,unknown>){if(busy===id)return;setBusy(id);try{const fn=httpsCallable(functions,'adminUpdateStoreAccess');await fn({storeId:id,...data});toast('Situação da loja atualizada.');}catch(err:any){try{const fallbackData:Record<string,unknown>={...data,updatedAt:serverTimestamp()};for(const field of ['trialEndsAt','subscriptionEndsAt']){if(Object.prototype.hasOwnProperty.call(fallbackData,field)){const value=fallbackData[field];if(value===null||value==='')fallbackData[field]=deleteField();else if(typeof value==='string'){const parsed=new Date(`${value}T23:59:59`);if(!Number.isNaN(parsed.getTime()))fallbackData[field]=Timestamp.fromDate(parsed);}}}await updateDoc(doc(db,'stores',id),fallbackData);toast('Situação da loja atualizada.');}catch(fallbackErr:any){toast(String(fallbackErr?.message||err?.message||'Não foi possível atualizar a loja.').replace('FirebaseError: ',''),'error');}}finally{setBusy('')}}
+ async function approvePayment(store:Store,request:PaymentRequest){if(busy===store.id)return;setBusy(store.id);try{const end=new Date();end.setDate(end.getDate()+30);const batch=writeBatch(db);batch.update(doc(db,'stores',store.id),{active:true,subscriptionStatus:'active',subscriptionEndsAt:Timestamp.fromDate(end),updatedAt:serverTimestamp()});batch.update(doc(db,'subscriptionPayments',request.id),{status:'approved',reviewedAt:serverTimestamp()});await batch.commit();toast('Pagamento aprovado e assinatura liberada por 30 dias.');}catch(e:any){toast(String(e?.message||'Não foi possível aprovar o pagamento.').replace('FirebaseError: ',''),'error');}finally{setBusy('')}}
+ const pendingByStore=useMemo(()=>new Map(payments.map(p=>[p.storeId,p])),[payments]);
+ const filtered=useMemo(()=>stores.filter(s=>{const derived=isTrialExpired(s)?'expired':s.subscriptionStatus||'trial';return(status==='all'||derived===status)&&`${s.name} ${s.slug} ${s.ownerEmail||''}`.toLowerCase().includes(search.toLowerCase())}),[stores,search,status]);
+ const summary=useMemo(()=>{const total=stores.length,expired=stores.filter(isTrialExpired).length,trial=stores.filter(s=>s.subscriptionStatus==='trial'&&!isTrialExpired(s)).length,active=stores.filter(s=>s.active!==false&&s.subscriptionStatus==='active').length,blocked=stores.filter(s=>!s.active||['suspended','cancelled'].includes(s.subscriptionStatus||'')).length,pending=stores.filter(s=>s.subscriptionStatus==='past_due').length+payments.length,pct=(value:number)=>total?Math.round((value/total)*100):0;return{total,trial,active,blocked,pending,expired,pct}},[stores,payments]);
+ return <><div className="page-head"><div><h1>Clientes e lojas</h1><p>Gerencie teste, assinatura e pagamentos manuais da plataforma em um só lugar.</p></div></div>
+ <section className="admin-store-overview" aria-label="Resumo das lojas"><div className="admin-store-metrics"><article className="admin-store-metric total"><div className="admin-store-metric-icon"><Building2 size={20}/></div><div><span>Total de lojas</span><strong>{summary.total}</strong><small>clientes cadastrados</small></div></article><article className="admin-store-metric trial"><div className="admin-store-metric-icon"><Clock3 size={20}/></div><div><span>Em teste</span><strong>{summary.trial}</strong><small>{summary.expired?`${summary.expired} teste(s) vencido(s)`: `${summary.pct(summary.trial)}% da base`}</small></div></article><article className="admin-store-metric active"><div className="admin-store-metric-icon"><BadgeCheck size={20}/></div><div><span>Ativas</span><strong>{summary.active}</strong><small>{summary.pct(summary.active)}% da base</small></div></article><article className="admin-store-metric blocked"><div className="admin-store-metric-icon"><WalletCards size={20}/></div><div><span>Aguardando ação</span><strong>{summary.expired+summary.pending}</strong><small>vencidos ou comprovantes</small></div></article></div></section>
+ {payments.length>0&&<section className="panel payment-review-panel"><div className="panel-head"><div><h2>Comprovantes aguardando conferência</h2><p>Solicitações registradas pelos lojistas após pagamento via Pix.</p></div><span className="status-chip warning">{payments.length} pendente(s)</span></div>{payments.map(p=>{const s=stores.find(x=>x.id===p.storeId);if(!s)return null;return <div className="payment-review-row" key={p.id}><div><strong>{s.name}</strong><small>{s.ownerEmail||s.slug} · Mensal</small></div><b>{money(Number(p.amount||0))}</b><button className="primary-btn compact" disabled={busy===s.id} onClick={()=>approvePayment(s,p)}><ShieldCheck size={15}/>{busy===s.id?'Aprovando...':'Aprovar e liberar 30 dias'}</button></div>})}</section>}
+ <div className="panel admin-toolbar"><div className="search-box"><Search size={17}/><input placeholder="Buscar loja, link ou e-mail..." value={search} onChange={e=>setSearch(e.target.value)}/></div><select value={status} onChange={e=>setStatus(e.target.value)}><option value="all">Todas as situações</option><option value="expired">Teste expirado</option>{Object.entries(labels).map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div>
+ <div className="table-card"><table><thead><tr><th>Cliente / loja</th><th>Vitrine</th><th>Assinatura</th><th>Teste até</th><th>Ações</th></tr></thead><tbody>{filtered.map(s=>{const expired=isTrialExpired(s),pending=pendingByStore.get(s.id);return <tr key={s.id} className={expired?'trial-expired-row':''}><td><strong>{s.name}</strong><small className="table-sub">{s.ownerEmail||'Lojista cadastrado'}</small>{pending&&<span className="table-pending-payment">Comprovante pendente</span>}</td><td><a className="table-link" href={`/loja/${s.slug}`} target="_blank" rel="noreferrer">/{s.slug}<ExternalLink size={13}/></a></td><td>{expired?<span className="status-chip warning">Teste expirado</span>:<select disabled={busy===s.id} value={s.subscriptionStatus||'trial'} onChange={e=>patch(s.id,{subscriptionStatus:e.target.value as SubscriptionStatus,active:!['suspended','cancelled'].includes(e.target.value)})}>{Object.entries(labels).map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>}</td><td><input className="date-input" type="date" value={isoDate(s.trialEndsAt)} onChange={e=>patch(s.id,{trialEndsAt:e.target.value})}/></td><td><div className="table-actions"><Link title="Abrir suporte" className="icon-btn" to={`/admin/suporte/${s.id}`}><Headphones size={16}/></Link>{pending?<button className="primary-btn compact" disabled={busy===s.id} onClick={()=>approvePayment(s,pending)}><BadgeCheck size={15}/>Aprovar</button>:<button disabled={busy===s.id} className={s.active?'secondary-btn compact':'primary-btn compact'} onClick={()=>patch(s.id,{active:!s.active,subscriptionStatus:!s.active?'active':'suspended'})}>{s.active?<><ShieldOff size={15}/>Bloquear</>:<><ShieldCheck size={15}/>Liberar</>}</button>}</div></td></tr>})}</tbody></table>{filtered.length===0&&<div className="empty-admin">Nenhuma loja encontrada.</div>}</div></>;
 }

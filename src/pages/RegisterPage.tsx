@@ -11,6 +11,13 @@ function slugify(v:string){
   return v.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,55);
 }
 
+const formatBrPhone=(value:string)=>{
+ const d=value.replace(/\D/g,'').slice(0,11);
+ if(d.length<=2)return d;if(d.length<=3)return `(${d.slice(0,2)}) ${d.slice(2)}`;
+ if(d.length<=7)return `(${d.slice(0,2)}) ${d.slice(2,3)} ${d.slice(3)}`;
+ return `(${d.slice(0,2)}) ${d.slice(2,3)} ${d.slice(3,7)} - ${d.slice(7,11)}`;
+};
+
 export function RegisterPage(){
   const navigate=useNavigate();
   const {login}=useAuth();
@@ -51,7 +58,7 @@ export function RegisterPage(){
           <label>Seu nome<input value={form.ownerName} onChange={e=>setForm({...form,ownerName:e.target.value})} required placeholder="Nome do responsável"/></label>
           <label>Nome da loja<input value={form.storeName} onChange={e=>setForm({...form,storeName:e.target.value})} required placeholder="Ex.: Loja Central"/></label>
           {slug&&<div className="slug-preview">Seu link: <strong>/loja/{slug}</strong></div>}
-          <div className="signup-two"><label>E-mail<input type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} required/></label><label>WhatsApp<input value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})} placeholder="(88) 99999-9999"/></label></div>
+          <div className="signup-two"><label>E-mail<input type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} required/></label><label>WhatsApp<input value={form.phone} onChange={e=>setForm({...form,phone:formatBrPhone(e.target.value)})} placeholder="(88) 99999-9999"/></label></div>
           <div className="signup-two"><label>Senha<input type="password" minLength={6} value={form.password} onChange={e=>setForm({...form,password:e.target.value})} required/></label><label>Confirmar senha<input type="password" minLength={6} value={form.confirm} onChange={e=>setForm({...form,confirm:e.target.value})} required/></label></div>
           {error&&<div className="error">{error}</div>}
           <button className="primary-btn big full" disabled={loading}>{loading?'Criando sua loja...':'Criar minha loja'}</button>
