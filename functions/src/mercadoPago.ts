@@ -8,7 +8,6 @@ if (getApps().length === 0) initializeApp();
 const db = getFirestore();
 
 // Segredos do backend. Nunca use VITE_ para estes valores.
-export const MP_ACCESS_TOKEN = defineSecret('MP_ACCESS_TOKEN');
 export const MP_CLIENT_ID = defineSecret('MP_CLIENT_ID');
 export const MP_CLIENT_SECRET = defineSecret('MP_CLIENT_SECRET');
 export const MP_OAUTH_REDIRECT_URI = defineSecret('MP_OAUTH_REDIRECT_URI');
@@ -121,23 +120,4 @@ export const mercadoPagoOauthCallback = onRequest({
   }
 });
 
-/**
- * Utilidade de teste da credencial PROPRIA da aplicacao Vitrio. Nao e usada
- * para receber dinheiro de lojas; as vendas usam o token OAuth do lojista.
- */
-export const testMercadoPagoBackendCredential = onCall({
-  region: 'us-central1',
-  secrets: [MP_ACCESS_TOKEN],
-}, async (request) => {
-  if (!request.auth) throw new HttpsError('unauthenticated', 'Faça login.');
-  const caller = await db.doc(`users/${request.auth.uid}`).get();
-  if (!caller.exists || caller.data()?.role !== 'admin' || caller.data()?.active !== true) {
-    throw new HttpsError('permission-denied', 'Somente administradores.');
-  }
-  const response = await fetch('https://api.mercadopago.com/users/me', {
-    headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN.value()}`, Accept: 'application/json' },
-  });
-  if (!response.ok) throw new HttpsError('failed-precondition', 'Credencial Mercado Pago invalida ou sem permissao.');
-  const body: any = await response.json();
-  return { ok: true, userId: String(body.id || '') };
-});
+

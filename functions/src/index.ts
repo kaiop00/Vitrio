@@ -711,17 +711,21 @@ export const updateOrderOperation = onCall({region:'us-central1'}, async request
 
 
 // Mercado Pago temporariamente desativado. Reative após configurar os secrets.
-/*
+
 export {
   getMercadoPagoConnectUrl,
   mercadoPagoOauthCallback,
-  testMercadoPagoBackendCredential,
 } from './mercadoPago';
-export { createMercadoPagoPayment, mercadoPagoWebhook, cleanupAbandonedOrders } from './payments';
-*/
 
-// Consulta pública protegida pelo telefone informado no pedido.
-// Retorna somente os dados necessários para acompanhamento pelo consumidor.
+export {
+  createMercadoPagoPayment,
+  mercadoPagoWebhook,
+  cleanupAbandonedOrders,
+} from './payments';
+
+
+ //Consulta pública protegida pelo telefone informado no pedido.
+ //Retorna somente os dados necessários para acompanhamento pelo consumidor.
 export const getPublicOrderTracking = onCall({region:'us-central1'}, async request=>{
   const orderId=String(request.data?.orderId||'').trim();
   const phone=String(request.data?.phone||'').replace(/\D/g,'');

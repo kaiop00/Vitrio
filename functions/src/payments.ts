@@ -73,16 +73,133 @@ function mapPaymentState(mpOrder: any): 'paid'|'pending'|'failed'|'refunded' {
 
 async function releaseStock(orderRef: DocumentReference, order: any) {
   if (order.stockReleasedAt) return;
+
   await db.runTransaction(async tx => {
     const fresh = await tx.get(orderRef);
     if (!fresh.exists || fresh.data()?.stockReleasedAt) return;
+
     const data = fresh.data()!;
-    for (const item of data.items || []) {
-      const pRef = db.doc(`products/${item.productId}`);
-      const p = await tx.get(pRef);
-      if (p.exists) tx.update(pRef, { stock: Number(p.data()?.stock || 0) + Number(item.quantity || 0), updatedAt: FieldValue.serverTimestamp() });
+    const items = Array.isArray(data.items) ? data.items : [];
+
+    const grouped = new Map<
+      string,
+      {
+        productId: string;
+        variantId: string;
+        quantity: number;
+        name: string;
+        variantName: string;
+      }
+    >();
+
+    for (const item of items) {
+      const productId = String(item.productId || '');
+      const variantId = String(item.variantId || '');
+      if (!productId) continue;
+
+      const key = `${productId}::${variantId}`;
+      const current = grouped.get(key);
+
+      grouped.set(key, {
+        productId,
+        variantId,
+        quantity:
+          Number(current?.quantity || 0) + Number(item.quantity || 0),
+        name: String(item.name || 'Produto'),
+        variantName: String(item.variantName || ''),
+      });
     }
-    tx.update(orderRef, { stockReleasedAt: FieldValue.serverTimestamp(), status: 'cancelled', updatedAt: FieldValue.serverTimestamp() });
+
+    const productIds = [...new Set(
+      [...grouped.values()].map(item => item.productId)
+    )];
+
+    const productRefs = productIds.map(id => db.doc(`products/${id}`));
+    const productSnaps = await Promise.all(
+      productRefs.map(ref => tx.get(ref))
+    );
+
+    const products = new Map(
+      productSnaps.map(snap => [snap.id, snap])
+    );
+
+    const updates = new Map<string, any>();
+
+    for (const item of grouped.values()) {
+      const snap = products.get(item.productId);
+      if (!snap?.exists) continue;
+
+      const product =
+        updates.get(item.productId) || {
+          ...snap.data(),
+          variants: Array.isArray(snap.data()?.variants)
+            ? snap.data()!.variants.map((v: any) => ({ ...v }))
+            : [],
+        };
+
+      const beforeProductStock = Number(product.stock || 0);
+      product.stock = beforeProductStock + item.quantity;
+
+      let before = beforeProductStock;
+      let after = product.stock;
+
+      if (item.variantId) {
+        const index = product.variants.findIndex(
+          (variant: any) =>
+            String(variant.id) === String(item.variantId)
+        );
+
+        if (index >= 0) {
+          before = Number(product.variants[index].stock || 0);
+          after = before + item.quantity;
+
+          product.variants[index] = {
+            ...product.variants[index],
+            stock: after,
+          };
+        }
+      }
+
+      updates.set(item.productId, product);
+
+      const movementRef = db.collection('inventoryMovements').doc();
+
+      tx.set(movementRef, {
+        storeId: data.storeId,
+        productId: item.productId,
+        productName: item.variantName
+          ? `${item.name} - ${item.variantName}`
+          : item.name,
+        variantId: item.variantId || '',
+        type: 'in',
+        quantity: item.quantity,
+        before,
+        after,
+        reason: `Pagamento não concluído #${orderRef.id
+          .slice(0, 6)
+          .toUpperCase()}`,
+        source: 'payment_release',
+        orderId: orderRef.id,
+        createdBy: 'system',
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    for (const [productId, product] of updates.entries()) {
+      const productRef = db.doc(`products/${productId}`);
+
+      tx.update(productRef, {
+        stock: product.stock,
+        variants: product.variants,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    tx.update(orderRef, {
+      stockReleasedAt: FieldValue.serverTimestamp(),
+      status: 'cancelled',
+      updatedAt: FieldValue.serverTimestamp(),
+    });
   });
 }
 
