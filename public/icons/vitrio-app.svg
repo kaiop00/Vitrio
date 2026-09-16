@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1024"
+     height="1024"
+     viewBox="0 0 1024 1024">
+
+  <defs>
+    <linearGradient id="vitrio" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#6355ff"/>
+      <stop offset="100%" stop-color="#8d54ff"/>
+    </linearGradient>
+  </defs>
+
+  <rect
+    x="0"
+    y="0"
+    width="1024"
+    height="1024"
+    rx="260"
+    fill="url(#vitrio)"
+  />
+
+  <!-- V com caixa visual centralizada em 512 x 512 -->
+  <path
+    d="
+      M 330 330
+      L 445 330
+      L 512 535
+      L 579 330
+      L 694 330
+      L 570 694
+      L 454 694
+      Z
+    "
+    fill="#ffffff"
+  />
+
+</svg>

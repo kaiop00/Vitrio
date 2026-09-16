@@ -73,84 +73,267 @@ function mapPaymentState(mpOrder: any): 'paid'|'pending'|'failed'|'refunded' {
 
 async function releaseStock(orderRef: DocumentReference, order: any) {
   if (order.stockReleasedAt) return;
+
   await db.runTransaction(async tx => {
     const fresh = await tx.get(orderRef);
     if (!fresh.exists || fresh.data()?.stockReleasedAt) return;
+
     const data = fresh.data()!;
-    for (const item of data.items || []) {
-      const pRef = db.doc(`products/${item.productId}`);
-      const p = await tx.get(pRef);
-      if (p.exists) tx.update(pRef, { stock: Number(p.data()?.stock || 0) + Number(item.quantity || 0), updatedAt: FieldValue.serverTimestamp() });
+    const items = Array.isArray(data.items) ? data.items : [];
+
+    const grouped = new Map<
+      string,
+      {
+        productId: string;
+        variantId: string;
+        quantity: number;
+        name: string;
+        variantName: string;
+      }
+    >();
+
+    for (const item of items) {
+      const productId = String(item.productId || '');
+      const variantId = String(item.variantId || '');
+      if (!productId) continue;
+
+      const key = `${productId}::${variantId}`;
+      const current = grouped.get(key);
+
+      grouped.set(key, {
+        productId,
+        variantId,
+        quantity:
+          Number(current?.quantity || 0) + Number(item.quantity || 0),
+        name: String(item.name || 'Produto'),
+        variantName: String(item.variantName || ''),
+      });
     }
-    tx.update(orderRef, { stockReleasedAt: FieldValue.serverTimestamp(), status: 'cancelled', updatedAt: FieldValue.serverTimestamp() });
+
+    const productIds = [...new Set(
+      [...grouped.values()].map(item => item.productId)
+    )];
+
+    const productRefs = productIds.map(id => db.doc(`products/${id}`));
+    const productSnaps = await Promise.all(
+      productRefs.map(ref => tx.get(ref))
+    );
+
+    const products = new Map(
+      productSnaps.map(snap => [snap.id, snap])
+    );
+
+    const updates = new Map<string, any>();
+
+    for (const item of grouped.values()) {
+      const snap = products.get(item.productId);
+      if (!snap?.exists) continue;
+
+      const product =
+        updates.get(item.productId) || {
+          ...snap.data(),
+          variants: Array.isArray(snap.data()?.variants)
+            ? snap.data()!.variants.map((v: any) => ({ ...v }))
+            : [],
+        };
+
+      const beforeProductStock = Number(product.stock || 0);
+      product.stock = beforeProductStock + item.quantity;
+
+      let before = beforeProductStock;
+      let after = product.stock;
+
+      if (item.variantId) {
+        const index = product.variants.findIndex(
+          (variant: any) =>
+            String(variant.id) === String(item.variantId)
+        );
+
+        if (index >= 0) {
+          before = Number(product.variants[index].stock || 0);
+          after = before + item.quantity;
+
+          product.variants[index] = {
+            ...product.variants[index],
+            stock: after,
+          };
+        }
+      }
+
+      updates.set(item.productId, product);
+
+      const movementRef = db.collection('inventoryMovements').doc();
+
+      tx.set(movementRef, {
+        storeId: data.storeId,
+        productId: item.productId,
+        productName: item.variantName
+          ? `${item.name} - ${item.variantName}`
+          : item.name,
+        variantId: item.variantId || '',
+        type: 'in',
+        quantity: item.quantity,
+        before,
+        after,
+        reason: `Pagamento não concluído #${orderRef.id
+          .slice(0, 6)
+          .toUpperCase()}`,
+        source: 'payment_release',
+        orderId: orderRef.id,
+        createdBy: 'system',
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    for (const [productId, product] of updates.entries()) {
+      const productRef = db.doc(`products/${productId}`);
+
+      tx.update(productRef, {
+        stock: product.stock,
+        variants: product.variants,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    tx.update(orderRef, {
+      stockReleasedAt: FieldValue.serverTimestamp(),
+      status: 'cancelled',
+      updatedAt: FieldValue.serverTimestamp(),
+    });
   });
 }
 
-async function applyPaidOrder(orderRef: DocumentReference, order: any, mpOrder: any) {
+async function applyPaidOrder(orderRef: DocumentReference, order: any, mpOrder: any){
+  const summary = getPaymentSummary(mpOrder);
+  const mercadoPagoPaymentId = String(summary.payment?.id || '');
+
   await db.runTransaction(async tx => {
+    /*
+     * IMPORTANTE:
+     * no Firestore todas as leituras da transação precisam acontecer
+     * antes de qualquer escrita.
+     */
     const fresh = await tx.get(orderRef);
     if (!fresh.exists) return;
+
     const data = fresh.data()!;
     if (data.paymentAppliedAt) return;
 
+    let customerRef: DocumentReference | null = null;
+    let customerSnap: any = null;
+
+    if (!data.customerSpentAppliedAt) {
+      const customerId =
+        `${data.storeId}_${String(data.customerPhone || '').replace(/\D/g,'')}`
+          .slice(0,180);
+
+      customerRef = db.doc(`customers/${customerId}`);
+
+      // LEITURA antes de qualquer tx.update/tx.set
+      customerSnap = await tx.get(customerRef);
+    }
+
+    /*
+     * A partir daqui começam as escritas.
+     */
     tx.update(orderRef, {
       paymentStatus: 'paid',
       status: data.status === 'pending_payment' ? 'paid' : data.status,
+
       paymentAppliedAt: FieldValue.serverTimestamp(),
       paidAt: FieldValue.serverTimestamp(),
+
       mercadoPagoStatus: String(mpOrder?.status || ''),
       mercadoPagoStatusDetail: String(mpOrder?.status_detail || ''),
+      mercadoPagoPaymentId,
+
       updatedAt: FieldValue.serverTimestamp(),
     });
 
     if (!data.customerSpentAppliedAt) {
-      const customerId = `${data.storeId}_${String(data.customerPhone || '').replace(/\D/g,'')}`.slice(0,180);
-      const customerRef = db.doc(`customers/${customerId}`);
-      const customer = await tx.get(customerRef);
-      if (customer.exists) {
-        tx.update(customerRef, { totalSpent: Number((Number(customer.data()?.totalSpent || 0) + Number(data.total || 0)).toFixed(2)), updatedAt: FieldValue.serverTimestamp() });
+      if (customerRef && customerSnap?.exists) {
+        tx.update(customerRef, {
+          totalSpent: Number(
+            (
+              Number(customerSnap.data()?.totalSpent || 0) +
+              Number(data.total || 0)
+            ).toFixed(2)
+          ),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
       }
-      tx.update(orderRef, { customerSpentAppliedAt: FieldValue.serverTimestamp() });
+
+      tx.update(orderRef, {
+        customerSpentAppliedAt: FieldValue.serverTimestamp(),
+      });
     }
 
     const paymentRef = db.doc(`payments/${orderRef.id}`);
+
     tx.set(paymentRef, {
       storeId: data.storeId,
       orderId: orderRef.id,
+
       provider: 'mercadopago',
-      providerOrderId: data.mercadoPagoOrderId || mpOrder?.id || '',
+
+      providerOrderId:
+        data.mercadoPagoOrderId ||
+        mpOrder?.id ||
+        '',
+
+      providerPaymentId: mercadoPagoPaymentId,
+
       amount: Number(data.total || 0),
       status: 'paid',
+
       paidAt: FieldValue.serverTimestamp(),
       createdAt: FieldValue.serverTimestamp(),
     }, { merge: true });
   });
 
-  // Se houver caixa aberto, lança a venda automaticamente uma única vez.
+  /*
+   * Movimento de caixa é processado separadamente.
+   */
   const latest = (await orderRef.get()).data();
+
   if (!latest?.cashMovementAppliedAt) {
     const open = await db.collection('cashRegisters')
       .where('storeId', '==', latest?.storeId)
       .where('status', '==', 'open')
-      .limit(1).get();
+      .limit(1)
+      .get();
 
     if (!open.empty) {
       const movementRef = db.doc(`cashMovements/mp_${orderRef.id}`);
+
       await db.runTransaction(async tx => {
         const orderSnap = await tx.get(orderRef);
-        if (!orderSnap.exists || orderSnap.data()?.cashMovementAppliedAt) return;
+
+        if (
+          !orderSnap.exists ||
+          orderSnap.data()?.cashMovementAppliedAt
+        ) return;
+
         tx.set(movementRef, {
           storeId: latest!.storeId,
           cashRegisterId: open.docs[0].id,
+
           type: 'income',
           amount: Number(latest!.total || 0),
-          description: `Venda online #${orderRef.id.slice(0,6).toUpperCase()}`,
+
+          description:
+            `Venda online #${orderRef.id.slice(0,6).toUpperCase()}`,
+
           source: 'mercadopago',
           orderId: orderRef.id,
+
           createdBy: 'system',
           createdAt: FieldValue.serverTimestamp(),
         });
-        tx.update(orderRef, { cashMovementAppliedAt: FieldValue.serverTimestamp() });
+
+        tx.update(orderRef, {
+          cashMovementAppliedAt: FieldValue.serverTimestamp(),
+        });
       });
     }
   }
@@ -193,6 +376,7 @@ export const createMercadoPagoPayment = onCall({
   }
 
   const seller = await getSellerSecret(String(order.storeId));
+
   const amount = Number(order.total || 0).toFixed(2);
   const body: any = {
     type: 'online',
@@ -237,12 +421,46 @@ export const createMercadoPagoPayment = onCall({
     body: JSON.stringify(body),
   });
   const mpOrder: any = await response.json();
+
+  const mercadoPagoRequestId = response.headers.get('x-request-id') || '';
+
+  console.log('[Mercado Pago Request]', JSON.stringify({
+    httpStatus: response.status,
+    requestId: mercadoPagoRequestId,
+    orderId: mpOrder?.id || '',
+    orderStatus: mpOrder?.status || '',
+    orderStatusDetail: mpOrder?.status_detail || ''
+  }, null, 2));
+
   if (!response.ok || !mpOrder?.id) {
-    console.error('Mercado Pago create order error', response.status, mpOrder);
+    console.error(
+      'Mercado Pago create order error',
+      response.status,
+      JSON.stringify(mpOrder, null, 2)
+    );
     throw new HttpsError('failed-precondition', 'O Mercado Pago não conseguiu processar o pagamento.');
   }
 
   const summary = getPaymentSummary(mpOrder);
+
+  if (kind === 'pix') {
+    console.log('[Vitrio Pix Debug]', JSON.stringify({
+      orderId: mpOrder?.id || '',
+      orderStatus: mpOrder?.status || '',
+      orderStatusDetail: mpOrder?.status_detail || '',
+      paymentId: summary.payment?.id || '',
+      paymentStatus: summary.payment?.status || '',
+      paymentStatusDetail: summary.payment?.status_detail || '',
+      paymentMethodKeys: Object.keys(summary.payment?.payment_method || {}),
+      hasQrCode: Boolean(summary.payment?.payment_method?.qr_code),
+      hasQrCodeBase64: Boolean(summary.payment?.payment_method?.qr_code_base64),
+      hasTicketUrl: Boolean(summary.payment?.payment_method?.ticket_url),
+      transactionPaymentCount: Array.isArray(mpOrder?.transactions?.payments)
+        ? mpOrder.transactions.payments.length
+        : 0
+    }));
+  }
+
   const pix = kind === 'pix' ? {
     qrCode: String(summary.payment?.payment_method?.qr_code || ''),
     qrCodeBase64: String(summary.payment?.payment_method?.qr_code_base64 || ''),
@@ -294,8 +512,31 @@ export const mercadoPagoWebhook = onRequest({
   region: 'us-central1',
   secrets: [MP_WEBHOOK_SECRET, MP_CLIENT_ID, MP_CLIENT_SECRET],
 }, async (req, res) => {
-  if (req.method !== 'POST') { res.status(405).send('Method not allowed'); return; }
-  if (!verifyWebhook(req)) { res.status(401).send('Invalid signature'); return; }
+  console.log('[Vitrio MP Webhook Incoming]', JSON.stringify({
+    method: req.method,
+    query: req.query || {},
+    body: req.body || {},
+    hasSignature: Boolean(req.header('x-signature')),
+    hasRequestId: Boolean(req.header('x-request-id'))
+  }, null, 2));
+
+  if (req.method !== 'POST') {
+    console.log('[Vitrio MP Webhook] Método ignorado:', req.method);
+    res.status(405).send('Method not allowed');
+    return;
+  }
+
+  const signatureValid = verifyWebhook(req);
+
+  console.log('[Vitrio MP Webhook Signature]', JSON.stringify({
+    valid: signatureValid
+  }));
+
+  if (!signatureValid) {
+    console.error('[Vitrio MP Webhook] Assinatura inválida');
+    res.status(401).send('Invalid signature');
+    return;
+  }
 
   const mpOrderId = String(req.query?.['data.id'] || req.query?.data_id || req.body?.data?.id || '');
   if (!mpOrderId) { res.status(200).send('ok'); return; }

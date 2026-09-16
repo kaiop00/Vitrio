@@ -1,6 +1,7 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
+import { getMessaging } from 'firebase-admin/messaging';
 import { FieldValue, Timestamp, getFirestore } from 'firebase-admin/firestore';
 if (getApps().length === 0) initializeApp();
 const db = getFirestore();
@@ -277,6 +278,169 @@ export const createStoreUser = onCall({ region: 'us-central1' }, async (request)
   }
 });
 
+
+export const updateStoreUser = onCall({ region:'us-central1' }, async request => {
+  if(!request.auth) throw new HttpsError('unauthenticated','Faça login.');
+
+  const callerSnap=await db.doc(`users/${request.auth.uid}`).get();
+  const caller=callerSnap.data();
+
+  const isAdmin=callerSnap.exists &&
+    caller?.role==='admin' &&
+    caller?.active===true;
+
+  const isOwner=callerSnap.exists &&
+    caller?.role==='merchant' &&
+    caller?.active===true &&
+    (caller?.isStoreOwner===true || !Array.isArray(caller?.permissions));
+
+  if(!isAdmin && !isOwner)
+    throw new HttpsError('permission-denied','Sem permissão para editar a equipe.');
+
+  const uid=String(request.data?.uid||'').trim();
+  const name=String(request.data?.name||'').trim();
+  const email=String(request.data?.email||'').trim().toLowerCase();
+  const permissions=Array.isArray(request.data?.permissions)
+    ? request.data.permissions.filter((p:string)=>ALL_PERMISSIONS.includes(p))
+    : [];
+
+  if(!uid || !name || !email || !email.includes('@'))
+    throw new HttpsError('invalid-argument','Informe nome e e-mail corretamente.');
+
+  if(uid===request.auth.uid)
+    throw new HttpsError('failed-precondition','O responsável principal não pode editar o próprio acesso por esta tela.');
+
+  const targetRef=db.doc(`users/${uid}`);
+  const targetSnap=await targetRef.get();
+
+  if(!targetSnap.exists)
+    throw new HttpsError('not-found','Funcionário não encontrado.');
+
+  const target=targetSnap.data()!;
+
+  if(target.isStoreOwner===true)
+    throw new HttpsError('failed-precondition','O responsável principal da loja não pode ser alterado por esta tela.');
+
+  if(isOwner && target.storeId!==caller?.storeId)
+    throw new HttpsError('permission-denied','Este funcionário não pertence à sua loja.');
+
+  try{
+    await getAuth().updateUser(uid,{
+      displayName:name,
+      email
+    });
+
+    await targetRef.update({
+      displayName:name,
+      email,
+      permissions,
+      updatedAt:FieldValue.serverTimestamp()
+    });
+
+    try{
+      await writeAudit(
+        String(target.storeId||caller?.storeId||''),
+        request.auth.uid,
+        String(caller?.displayName||caller?.email||'Responsável'),
+        'update_user',
+        'user',
+        uid,
+        `Acesso de ${name} atualizado.`
+      );
+    }catch(auditErr){
+      console.error('updateStoreUser audit',auditErr);
+    }
+
+    return {ok:true};
+  }catch(err:any){
+    const code=String(err?.code||'');
+
+    if(code.includes('email-already-exists'))
+      throw new HttpsError('already-exists','Este e-mail já está sendo utilizado por outro acesso.');
+
+    if(code.includes('invalid-email'))
+      throw new HttpsError('invalid-argument','O e-mail informado é inválido.');
+
+    if(err instanceof HttpsError) throw err;
+
+    console.error('updateStoreUser',err);
+    throw new HttpsError('internal','Não foi possível atualizar o funcionário.');
+  }
+});
+
+
+export const deleteStoreUser = onCall({ region:'us-central1' }, async request => {
+  if(!request.auth) throw new HttpsError('unauthenticated','Faça login.');
+
+  const callerSnap=await db.doc(`users/${request.auth.uid}`).get();
+  const caller=callerSnap.data();
+
+  const isAdmin=callerSnap.exists &&
+    caller?.role==='admin' &&
+    caller?.active===true;
+
+  const isOwner=callerSnap.exists &&
+    caller?.role==='merchant' &&
+    caller?.active===true &&
+    (caller?.isStoreOwner===true || !Array.isArray(caller?.permissions));
+
+  if(!isAdmin && !isOwner)
+    throw new HttpsError('permission-denied','Sem permissão para excluir membros da equipe.');
+
+  const uid=String(request.data?.uid||'').trim();
+
+  if(!uid)
+    throw new HttpsError('invalid-argument','Funcionário não informado.');
+
+  if(uid===request.auth.uid)
+    throw new HttpsError('failed-precondition','Você não pode excluir o próprio acesso.');
+
+  const targetRef=db.doc(`users/${uid}`);
+  const targetSnap=await targetRef.get();
+
+  if(!targetSnap.exists)
+    throw new HttpsError('not-found','Funcionário não encontrado.');
+
+  const target=targetSnap.data()!;
+
+  if(target.isStoreOwner===true)
+    throw new HttpsError('failed-precondition','O responsável principal da loja não pode ser excluído.');
+
+  if(isOwner && target.storeId!==caller?.storeId)
+    throw new HttpsError('permission-denied','Este funcionário não pertence à sua loja.');
+
+  const storeId=String(target.storeId||caller?.storeId||'');
+  const employeeName=String(target.displayName||target.email||'Funcionário');
+
+  try{
+    // Exclui primeiro do Authentication. Se falhar, o perfil permanece intacto.
+    await getAuth().deleteUser(uid);
+    await targetRef.delete();
+
+    try{
+      await writeAudit(
+        storeId,
+        request.auth.uid,
+        String(caller?.displayName||caller?.email||'Responsável'),
+        'delete_user',
+        'user',
+        uid,
+        `Acesso de ${employeeName} excluído.`
+      );
+    }catch(auditErr){
+      console.error('deleteStoreUser audit',auditErr);
+    }
+
+    return {ok:true};
+  }catch(err:any){
+    if(err instanceof HttpsError) throw err;
+
+    console.error('deleteStoreUser',err);
+    throw new HttpsError('internal','Não foi possível excluir o funcionário.');
+  }
+});
+
+
 type CheckoutItem = { productId: string; quantity: number; variantId?: string; addonOptionIds?: string[] };
 
 function normalizeItems(rawItems: CheckoutItem[]) {
@@ -395,9 +559,13 @@ export const getPublicStoreBySlug = onCall({region:'us-central1'}, async request
     instagram:String(store.instagram||''),
     address:String(store.address||''),
     primaryColor:String(store.primaryColor||'#6d5dfc'),
-    checkoutMode:'whatsapp',
+    checkoutMode:['whatsapp','online','both'].includes(String(store.checkoutMode))
+      ? String(store.checkoutMode)
+      : 'whatsapp',
     allowPix:store.allowPix!==false,
     allowCard:store.allowCard!==false,
+    paymentProviderConnected:store.paymentProviderConnected===true,
+    mercadoPagoPublicKey:String(store.mercadoPagoPublicKey||''),
     allowCash:store.allowCash!==false,
     allowPickup:store.allowPickup!==false,
     allowDelivery:store.allowDelivery!==false,
@@ -417,6 +585,102 @@ export const getCheckoutQuote = onCall({ region:'us-central1' }, async request =
   const q = await calculateQuote(request.data || {});
   return {subtotal:q.subtotal,discount:q.discount,couponCode:q.couponCode,deliveryFee:q.deliveryFee,deliveryZoneName:q.deliveryZoneName,total:q.total};
 });
+
+async function sendNewOrderPush(params:{
+  storeId:string;
+  orderId:string;
+  customerName:string;
+  total:number;
+}){
+  try{
+    const devices=await db.collection('pushDevices')
+      .where('storeId','==',params.storeId)
+      .where('active','==',true)
+      .get();
+
+    if(devices.empty)return;
+
+    const tokens=devices.docs
+      .map(d=>String(d.data()?.token||''))
+      .filter(Boolean);
+
+    if(!tokens.length)return;
+
+    const shortId=params.orderId.slice(0,6).toUpperCase();
+    const value=new Intl.NumberFormat('pt-BR',{
+      style:'currency',
+      currency:'BRL'
+    }).format(Number(params.total||0));
+
+    const storeSnap=await db.collection('stores').doc(params.storeId).get();
+    const storeName=String(storeSnap.data()?.name||'Sua loja').trim();
+
+    const response=await getMessaging().sendEachForMulticast({
+      tokens,
+      data:{
+        type:'new_order',
+        orderId:params.orderId,
+        storeId:params.storeId,
+        title:`Vitrio • ${storeName}`,
+        body:`Pedido #${shortId} · ${params.customerName} · ${value}`,
+        url:'/painel/pedidos'
+      },
+      webpush:{
+        headers:{
+          Urgency:'high'
+        }
+      }
+    });
+
+    const invalidCodes=new Set([
+      'messaging/registration-token-not-registered',
+      'messaging/invalid-registration-token'
+    ]);
+
+    const removals:Promise<any>[]=[];
+
+    response.responses.forEach((result,index)=>{
+      if(result.success)return;
+
+      const code=String(result.error?.code||'');
+
+      console.warn(
+        'FCM push falhou',
+        params.storeId,
+        params.orderId,
+        code
+      );
+
+      if(invalidCodes.has(code)){
+        const token=tokens[index];
+
+        for(const device of devices.docs){
+          if(String(device.data()?.token||'')===token){
+            removals.push(device.ref.delete());
+          }
+        }
+      }
+    });
+
+    if(removals.length){
+      await Promise.allSettled(removals);
+    }
+
+    console.log(
+      'FCM novo pedido',
+      params.orderId,
+      `sucesso=${response.successCount}`,
+      `falha=${response.failureCount}`
+    );
+  }catch(error){
+    // Push jamais pode impedir a criação do pedido.
+    console.error(
+      'Falha ao enviar push de novo pedido',
+      params.orderId,
+      error
+    );
+  }
+}
 
 export const createOrder = onCall({ region: 'us-central1' }, async (request) => {
   const data = request.data || {};
@@ -490,7 +754,7 @@ export const createOrder = onCall({ region: 'us-central1' }, async (request) => 
     }
     for(const u of updates.values())tx.update(u.ref,{stock:u.data.stock,variants:u.data.variants||[],updatedAt:FieldValue.serverTimestamp()});
     const whatsappSale = checkoutSource === 'whatsapp';
-    tx.set(orderRef,{storeId,customerName,customerPhone,customerEmail,fulfillment,address:fulfillment==='delivery'?address:'',paymentMethod,cashChangeFor:paymentMethod==='Dinheiro'?cashChangeFor:'',customerNotes,items:quote.items,subtotal:quote.subtotal,discount:quote.discount,couponCode:quote.couponCode,deliveryFee:quote.deliveryFee,deliveryZoneId:quote.deliveryZoneId,deliveryZoneName:quote.deliveryZoneName,total:quote.total,status:whatsappSale?'paid':'pending_payment',paymentStatus:whatsappSale?'paid':'pending',paidAt:whatsappSale?FieldValue.serverTimestamp():null,source:whatsappSale?'whatsapp_checkout':'vitrio_checkout',financialAppliedAt:whatsappSale?FieldValue.serverTimestamp():null,createdAt:FieldValue.serverTimestamp()});
+    tx.set(orderRef,{storeId,customerName,customerPhone,customerEmail,fulfillment,address:fulfillment==='delivery'?address:'',paymentMethod,cashChangeFor:paymentMethod==='Dinheiro'?cashChangeFor:'',customerNotes,items:quote.items,subtotal:quote.subtotal,discount:quote.discount,couponCode:quote.couponCode,deliveryFee:quote.deliveryFee,deliveryZoneId:quote.deliveryZoneId,deliveryZoneName:quote.deliveryZoneName,total:quote.total,status:'pending_payment',paymentStatus:'pending',paidAt:null,source:whatsappSale?'whatsapp_checkout':'vitrio_checkout',financialAppliedAt:null,createdAt:FieldValue.serverTimestamp()});
   });
 
   if(quote.couponCode){
@@ -501,30 +765,35 @@ export const createOrder = onCall({ region: 'us-central1' }, async (request) => 
   const customerId=`${storeId}_${customerPhone.replace(/\D/g,'')}`.slice(0,180);
   const customerRef=db.doc(`customers/${customerId}`); const customerSnap=await customerRef.get(); const previous=customerSnap.exists?customerSnap.data()!:{};
   const whatsappSale = checkoutSource === 'whatsapp';
-  await customerRef.set({storeId,name:customerName,phone:customerPhone,email:customerEmail,ordersCount:Number(previous.ordersCount||0)+1,totalSpent:Number((Number(previous.totalSpent||0)+(whatsappSale?Number(quote.total||0):0)).toFixed(2)),lastOrderAt:FieldValue.serverTimestamp(),createdAt:previous.createdAt||FieldValue.serverTimestamp(),updatedAt:FieldValue.serverTimestamp()},{merge:true});
+  await customerRef.set({storeId,name:customerName,phone:customerPhone,email:customerEmail,ordersCount:Number(previous.ordersCount||0)+1,totalSpent:Number(previous.totalSpent||0),lastOrderAt:FieldValue.serverTimestamp(),createdAt:previous.createdAt||FieldValue.serverTimestamp(),updatedAt:FieldValue.serverTimestamp()},{merge:true});
 
   if (whatsappSale) {
-    const open = await db.collection('cashRegisters').where('storeId','==',storeId).where('status','==','open').limit(1).get();
-    if (!open.empty) {
-      const movementRef = db.doc(`cashMovements/cash_${orderRef.id}`);
-      await movementRef.set({
-        storeId,
-        cashRegisterId:open.docs[0].id,
-        type:'income',
-        amount:Number(quote.total||0),
-        description:`Venda WhatsApp #${orderRef.id.slice(0,6).toUpperCase()}`,
-        source:'whatsapp_order',
-        orderId:orderRef.id,
-        paymentMethod,
-        createdBy:'system',
-        createdAt:FieldValue.serverTimestamp()
-      },{merge:false}).catch(()=>{});
-    }
-
-    await writeAudit(storeId,'system','Checkout WhatsApp','whatsapp_sale','order',orderRef.id,`Venda pelo WhatsApp #${orderRef.id.slice(0,6).toUpperCase()} registrada automaticamente.`);
+    await writeAudit(
+      storeId,
+      'system',
+      'Checkout WhatsApp',
+      'whatsapp_order',
+      'order',
+      orderRef.id,
+      `Pedido pelo WhatsApp #${orderRef.id.slice(0,6).toUpperCase()} criado aguardando confirmação do pagamento.`
+    );
   }
 
-  return {orderId:orderRef.id,total:quote.total,discount:quote.discount,deliveryFee:quote.deliveryFee,financialApplied:whatsappSale};
+  // A venda já foi criada. Push é best effort e nunca deve bloquear o checkout.
+  await sendNewOrderPush({
+    storeId,
+    orderId:orderRef.id,
+    customerName,
+    total:Number(quote.total||0)
+  });
+
+  return {
+    orderId:orderRef.id,
+    total:quote.total,
+    discount:quote.discount,
+    deliveryFee:quote.deliveryFee,
+    financialApplied:false
+  };
 });
 
 
@@ -534,8 +803,21 @@ export const confirmOfflinePayment = onCall({region:'us-central1'}, async reques
   const orderRef=db.doc(`orders/${orderId}`),snap=await orderRef.get();
   if(!snap.exists) throw new HttpsError('not-found','Pedido não encontrado.');
   const order=snap.data()!,user=await requireStorePermission(request,String(order.storeId),'orders');
-  if(order.paymentMethod!=='Dinheiro') throw new HttpsError('failed-precondition','Confirmação manual disponível somente para pagamento offline.');
-  if(order.status==='cancelled') throw new HttpsError('failed-precondition','Pedido cancelado.');
+  const hasIntegratedPayment =
+    Boolean(order.mercadoPagoOrderId) ||
+    Boolean(order.mercadoPagoPaymentId);
+
+  if(hasIntegratedPayment){
+    throw new HttpsError(
+      'failed-precondition',
+      'Pagamentos integrados são confirmados automaticamente pelo Mercado Pago.'
+    );
+  }
+
+  if(order.status==='cancelled'){
+    throw new HttpsError('failed-precondition','Pedido cancelado.');
+  }
+
   if(order.paymentStatus==='paid') return {ok:true};
 
   const customerId=`${order.storeId}_${String(order.customerPhone||'').replace(/\D/g,'')}`.slice(0,180);
@@ -555,7 +837,7 @@ export const confirmOfflinePayment = onCall({region:'us-central1'}, async reques
     const movementRef=db.doc(`cashMovements/cash_${orderId}`);
     await movementRef.set({storeId:order.storeId,cashRegisterId:open.docs[0].id,type:'income',amount:Number(order.total||0),description:`Venda #${orderId.slice(0,6).toUpperCase()}`,source:'order',orderId,createdBy:user.uid,createdAt:FieldValue.serverTimestamp()},{merge:false}).catch(()=>{});
   }
-  await writeAudit(order.storeId,user.uid,user.name,'confirm_payment','order',orderId,`Pagamento em dinheiro confirmado no pedido #${orderId.slice(0,6).toUpperCase()}.`);
+  await writeAudit(order.storeId,user.uid,user.name,'confirm_payment','order',orderId,`Pagamento ${String(order.paymentMethod||'convencional')} confirmado manualmente no pedido #${orderId.slice(0,6).toUpperCase()}.`);
   return {ok:true};
 });
 
@@ -630,7 +912,7 @@ export const registerReturn = onCall({region:'us-central1'}, async request=>{
     if(!Number.isInteger(idx)||!soldItem||qty<1||qty+Number(already.get(idx)||0)>Number(soldItem.quantity||0))
       throw new HttpsError('invalid-argument','Quantidade de devolução excede o que ainda pode ser devolvido.');
     const unitPrice=Number(soldItem.price||0),line=Number((unitPrice*qty).toFixed(2));total+=line;
-    retItems.push({orderItemIndex:idx,productId:String(soldItem.productId||''),name:String(soldItem.name||'Produto'),variantId:String(soldItem.variantId||''),variantName:String(soldItem.variantName||''),quantity:qty,unitPrice,total:line});
+    retItems.push({orderItemIndex:idx,productId:String(soldItem.productId||''),name:String(soldItem.name||'Produto'),variantId:String(soldItem.variantId||''),variantName:String(soldItem.variantName||''),variantSku:String(soldItem.variantSku||''),quantity:qty,unitPrice,total:line});
   }
   total=Number(total.toFixed(2));
   const isRefund=type==='return';
@@ -649,6 +931,16 @@ export const registerReturn = onCall({region:'us-central1'}, async request=>{
   const customerId=`${order.storeId}_${String(order.customerPhone||'').replace(/\D/g,'')}`.slice(0,180);
   const customerRef=db.doc(`customers/${customerId}`);
 
+  // Movimentos originais preservam a variação que realmente teve
+  // o estoque baixado quando o pedido foi realizado.
+  const originalMovementsSnap=await db.collection('inventoryMovements')
+    .where('orderId','==',orderId)
+    .get();
+
+  const originalMovements=originalMovementsSnap.docs
+    .map(doc=>({id:doc.id,...doc.data()} as any))
+    .filter((m:any)=>m.type==='out' && m.source==='order');
+
   await db.runTransaction(async tx=>{
     // Firestore exige todas as leituras antes das escritas.
     const productSnaps=new Map<string,any>();
@@ -661,13 +953,121 @@ export const registerReturn = onCall({region:'us-central1'}, async request=>{
       if(!snap?.exists) throw new HttpsError('not-found',`Produto ${item.name} não encontrado no estoque.`);
       const data=productData.get(item.productId)||{...snap.data(),variants:Array.isArray(snap.data()?.variants)?snap.data().variants.map((v:any)=>({...v})):[]};
       if(item.variantId){
-        const idx=data.variants.findIndex((v:any)=>String(v.id)===item.variantId);
-        if(idx<0) throw new HttpsError('failed-precondition',`A variação ${item.variantName||item.name} não existe mais no produto.`);
-        const before=Number(data.variants[idx].stock||0),after=before+item.quantity;
-        data.variants[idx]={...data.variants[idx],stock:after};
+        // O ID salvo no pedido continua sendo a referência principal.
+        // Para pedidos antigos, cuja variação pode ter recebido um novo ID,
+        // fazemos fallback pelo nome normalizado da variação.
+        let idx=data.variants.findIndex((v:any)=>String(v.id)===item.variantId);
+
+        // Se o ID armazenado no pedido não existe mais, consulta o movimento
+        // original que efetivamente baixou o estoque daquele produto.
+        if(idx<0){
+          const historicalMovements=originalMovements.filter(
+            (m:any)=>String(m.productId||'')===String(item.productId)
+          );
+
+          const historicalVariantIds=[
+            ...new Set(
+              historicalMovements
+                .map((m:any)=>String(m.variantId||''))
+                .filter(Boolean)
+            )
+          ];
+
+          // Só utilizamos o histórico automaticamente quando ele aponta
+          // inequivocamente para uma única variação ainda existente.
+          if(historicalVariantIds.length===1){
+            const historicalVariantId=historicalVariantIds[0];
+
+            const historicalIdx=data.variants.findIndex(
+              (v:any)=>String(v.id||'')===historicalVariantId
+            );
+
+            if(historicalIdx>=0){
+              idx=historicalIdx;
+            }
+          }
+        }
+
+        if(idx<0 && item.variantName){
+          const normalizeVariantName=(value:any)=>String(value||'')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g,'')
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g,' ');
+
+          const normalizeSku=(value:any)=>String(value||'')
+            .trim()
+            .toLowerCase();
+
+          const wantedName=normalizeVariantName(item.variantName);
+          const wantedSku=normalizeSku(item.variantSku);
+
+          const nameMatches=data.variants
+            .map((v:any,index:number)=>({v,index}))
+            .filter(({v}:any)=>normalizeVariantName(v.name)===wantedName);
+
+          // Pedidos que guardaram SKU: nome + SKU identifica a variação histórica.
+          if(wantedSku){
+            const skuMatches=nameMatches.filter(
+              ({v}:any)=>normalizeSku(v.sku)===wantedSku
+            );
+
+            if(skuMatches.length===1){
+              idx=skuMatches[0].index;
+            }else if(skuMatches.length>1){
+              throw new HttpsError(
+                'failed-precondition',
+                `Existem múltiplas variações ${item.variantName} com o SKU ${item.variantSku}. Revise o produto antes de registrar a devolução.`
+              );
+            }
+          }
+
+          // Compatibilidade para pedidos sem SKU histórico.
+          if(idx<0){
+            if(nameMatches.length===1){
+              idx=nameMatches[0].index;
+            }else if(nameMatches.length>1){
+              throw new HttpsError(
+                'failed-precondition',
+                `Não foi possível identificar com segurança qual variação ${item.variantName} pertence a este pedido antigo.`
+              );
+            }
+          }
+        }
+
+        if(idx<0)
+          throw new HttpsError(
+            'failed-precondition',
+            `A variação ${item.variantName||item.name} não existe mais no produto.`
+          );
+
+        const currentVariant=data.variants[idx];
+        const currentVariantId=String(currentVariant.id||item.variantId);
+        const before=Number(currentVariant.stock||0);
+        const after=before+item.quantity;
+
+        data.variants[idx]={...currentVariant,stock:after};
         data.stock=Number(data.stock||0)+item.quantity;
+
         const mv=db.collection('inventoryMovements').doc();
-        tx.set(mv,{storeId:order.storeId,productId:item.productId,productName:`${item.name} - ${item.variantName}`,variantId:item.variantId,type:'in',quantity:item.quantity,before,after,reason:`${type==='exchange'?'Troca':'Devolução'} #${orderId.slice(0,6).toUpperCase()} · ${reason}`,source:'return',orderId,returnId:returnRef.id,createdBy:user.uid,createdAt:FieldValue.serverTimestamp()});
+        tx.set(mv,{
+          storeId:order.storeId,
+          productId:item.productId,
+          productName:`${item.name} - ${item.variantName}`,
+          variantId:currentVariantId,
+          originalVariantId:item.variantId,
+          type:'in',
+          quantity:item.quantity,
+          before,
+          after,
+          reason:`${type==='exchange'?'Troca':'Devolução'} #${orderId.slice(0,6).toUpperCase()} · ${reason}`,
+          source:'return',
+          orderId,
+          returnId:returnRef.id,
+          createdBy:user.uid,
+          createdAt:FieldValue.serverTimestamp()
+        });
       }else{
         const before=Number(data.stock||0),after=before+item.quantity;data.stock=after;
         const mv=db.collection('inventoryMovements').doc();
@@ -696,11 +1096,38 @@ export const updateOrderOperation = onCall({region:'us-central1'}, async request
   const orderRef=db.doc(`orders/${orderId}`),snap=await orderRef.get();
   if(!snap.exists) throw new HttpsError('not-found','Pedido não encontrado.');
   const order=snap.data()!,user=await requireStorePermission(request,String(order.storeId),'orders');
-  const allowed=['pending_payment','paid','preparing','ready','out_for_delivery','completed'];
+  const allowed=['paid','preparing','ready','out_for_delivery','completed'];
   const updates:any={updatedAt:FieldValue.serverTimestamp()};
+
   if(status){
-    if(!allowed.includes(status)) throw new HttpsError('invalid-argument','Status inválido.');
-    if(status==='paid' && order.paymentStatus!=='paid') throw new HttpsError('failed-precondition','Pagamento ainda não confirmado.');
+    if(!allowed.includes(status)){
+      throw new HttpsError(
+        'invalid-argument',
+        'Status operacional inválido.'
+      );
+    }
+
+    if(order.status==='cancelled'){
+      throw new HttpsError(
+        'failed-precondition',
+        'Pedido cancelado não pode ter o andamento alterado.'
+      );
+    }
+
+    if(order.paymentStatus!=='paid'){
+      throw new HttpsError(
+        'failed-precondition',
+        'O andamento só pode iniciar após a confirmação do pagamento.'
+      );
+    }
+
+    if(status==='out_for_delivery' && order.fulfillment!=='delivery'){
+      throw new HttpsError(
+        'failed-precondition',
+        'Pedidos para retirada não possuem a etapa "Saiu para entrega".'
+      );
+    }
+
     updates.status=status;
   }
   if(request.data && Object.prototype.hasOwnProperty.call(request.data,'merchantNotes')) updates.merchantNotes=merchantNotes;
@@ -711,17 +1138,22 @@ export const updateOrderOperation = onCall({region:'us-central1'}, async request
 
 
 // Mercado Pago temporariamente desativado. Reative após configurar os secrets.
-/*
+
 export {
   getMercadoPagoConnectUrl,
   mercadoPagoOauthCallback,
-  testMercadoPagoBackendCredential,
+  disconnectMercadoPago,
 } from './mercadoPago';
-export { createMercadoPagoPayment, mercadoPagoWebhook, cleanupAbandonedOrders } from './payments';
-*/
 
-// Consulta pública protegida pelo telefone informado no pedido.
-// Retorna somente os dados necessários para acompanhamento pelo consumidor.
+export {
+  createMercadoPagoPayment,
+  mercadoPagoWebhook,
+  cleanupAbandonedOrders,
+} from './payments';
+
+
+ //Consulta pública protegida pelo telefone informado no pedido.
+ //Retorna somente os dados necessários para acompanhamento pelo consumidor.
 export const getPublicOrderTracking = onCall({region:'us-central1'}, async request=>{
   const orderId=String(request.data?.orderId||'').trim();
   const phone=String(request.data?.phone||'').replace(/\D/g,'');
@@ -736,8 +1168,16 @@ export const getPublicOrderTracking = onCall({region:'us-central1'}, async reque
   const toLabel=(v:any)=>{const d=v?.toDate?.();return d?d.toLocaleString('pt-BR',{timeZone:'America/Fortaleza'}):''};
   return {
     shortId:orderId.slice(0,6).toUpperCase(),storeName:String(store.name||'Loja'),customerName:String(order.customerName||'Cliente').split(' ')[0],
-    status:String(order.status||'pending_payment'),paymentStatus:String(order.paymentStatus||'pending'),fulfillment:String(order.fulfillment||'pickup'),
-    address:order.fulfillment==='delivery'?String(order.address||''):'',total:Number(order.total||0),
+    status:String(order.status||'pending_payment'),
+    paymentStatus:String(order.paymentStatus||'pending'),
+    paymentMethod:String(order.paymentMethod||''),
+    source:String(order.source||''),
+    mercadoPagoPaymentId:order.source==='vitrio_checkout'
+      ? String(order.mercadoPagoPaymentId||'')
+      : '',
+    fulfillment:String(order.fulfillment||'pickup'),
+    address:order.fulfillment==='delivery'?String(order.address||''):'',
+    total:Number(order.total||0),
     items:(order.items||[]).map((i:any)=>({productId:String(i.productId||''),name:String(i.name||'Produto'),quantity:Number(i.quantity||0),subtotal:Number(i.subtotal||0),variantName:String(i.variantName||''),addons:Array.isArray(i.addons)?i.addons.map((a:any)=>({groupName:String(a.groupName||''),optionName:String(a.optionName||'')})):[]})),
     createdLabel:toLabel(order.createdAt),updatedLabel:toLabel(order.updatedAt),supportPhone:String(store.supportPhone||store.whatsapp||'')
   };
@@ -829,3 +1269,95 @@ export const adminAnswerSupportTicket = onCall({region:'us-central1'}, async req
   return {ok:true};
 });
 
+
+
+// -----------------------------------------------------------------------------
+// PUSH — dispositivos autorizados da loja
+// -----------------------------------------------------------------------------
+
+export const registerPushDevice = onCall(
+  { region: 'us-central1' },
+  async request => {
+    const data = request.data || {};
+    const storeId = String(data.storeId || '').trim();
+    const token = String(data.token || '').trim();
+
+    if (!storeId || !token) {
+      throw new HttpsError(
+        'invalid-argument',
+        'Loja e dispositivo são obrigatórios.'
+      );
+    }
+
+    const user: any = await requireStorePermission(
+      request,
+      storeId,
+      'orders'
+    );
+
+    // Não usamos o token como ID diretamente para evitar caracteres/tamanho
+    // inconvenientes no caminho do Firestore.
+    const crypto = await import('node:crypto');
+    const tokenHash = crypto
+      .createHash('sha256')
+      .update(token)
+      .digest('hex');
+
+    await db.doc(`pushDevices/${tokenHash}`).set(
+      {
+        storeId,
+        userId: request.auth!.uid,
+        userName: String(user.name || ''),
+        token,
+        userAgent: String(data.userAgent || '').slice(0, 500),
+        platform: String(data.platform || '').slice(0, 100),
+        language: String(data.language || '').slice(0, 30),
+        active: true,
+        updatedAt: FieldValue.serverTimestamp(),
+        createdAt: FieldValue.serverTimestamp()
+      },
+      { merge: true }
+    );
+
+    return { ok: true };
+  }
+);
+
+
+export const unregisterPushDevice = onCall(
+  { region: 'us-central1' },
+  async request => {
+    const data = request.data || {};
+    const storeId = String(data.storeId || '').trim();
+    const token = String(data.token || '').trim();
+
+    if (!storeId || !token) {
+      throw new HttpsError(
+        'invalid-argument',
+        'Loja e dispositivo são obrigatórios.'
+      );
+    }
+
+    await requireStorePermission(
+      request,
+      storeId,
+      'orders'
+    );
+
+    const crypto = await import('node:crypto');
+    const tokenHash = crypto
+      .createHash('sha256')
+      .update(token)
+      .digest('hex');
+
+    const ref = db.doc(`pushDevices/${tokenHash}`);
+    const snap = await ref.get();
+
+    // Impede uma loja de remover token pertencente a outra.
+    if (snap.exists && snap.data()?.storeId === storeId) {
+      await ref.delete();
+    }
+
+    return { ok: true };
+  }
+);
