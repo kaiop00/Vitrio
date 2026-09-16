@@ -121,3 +121,56 @@ export const mercadoPagoOauthCallback = onRequest({
 });
 
 
+
+/**
+ * Desconecta a conta Mercado Pago da loja.
+ * Remove somente a autorização da integração.
+ * Pedidos, pagamentos e histórico financeiro são preservados.
+ */
+export const disconnectMercadoPago = onCall({
+  region: 'us-central1',
+}, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError('unauthenticated', 'Faça login.');
+  }
+
+  const storeId = await assertMerchant(request.auth.uid);
+
+  const storeRef = db.doc(`stores/${storeId}`);
+  const secretRef = db.doc(`storePaymentSecrets/${storeId}`);
+
+  await db.runTransaction(async (tx) => {
+    const storeSnap = await tx.get(storeRef);
+
+    if (!storeSnap.exists) {
+      throw new HttpsError('not-found', 'Loja não encontrada.');
+    }
+
+    const store = storeSnap.data() || {};
+    const checkoutMode = String(store.checkoutMode || 'whatsapp');
+
+    // Remove as credenciais privadas da integração.
+    tx.delete(secretRef);
+
+    // Mantém a vitrine funcional caso ela dependesse exclusivamente
+    // do pagamento integrado.
+    tx.set(storeRef, {
+      paymentProvider: '',
+      paymentProviderConnected: false,
+      mercadoPagoUserId: '',
+      mercadoPagoPublicKey: '',
+      paymentProviderDisconnectedAt: FieldValue.serverTimestamp(),
+
+      ...(checkoutMode === 'online' || checkoutMode === 'both'
+        ? { checkoutMode: 'whatsapp' }
+        : {}),
+
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+  });
+
+  return {
+    ok: true,
+    checkoutMode: 'whatsapp',
+  };
+});

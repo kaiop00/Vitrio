@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { collection, doc, getDocs, onSnapshot, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { ArrowUpDown, BadgePercent, Check, Clock3, Copy, Heart, Info, Minus, Plus, Search, Share2, ShoppingBag, Star, X } from 'lucide-react';
 import { db, functions } from '../../lib/firebase';
@@ -20,6 +20,14 @@ const formatBrPhone=(value:string)=>{
 };
 type PixData={qrCode?:string;qrCodeBase64?:string;ticketUrl?:string};
 type CardStage={orderId:string;total:number;publicKey:string;email:string};
+type PaymentResult={
+  orderId:string;
+  mercadoPagoOrderId:string;
+  status:string;
+  statusDetail?:string;
+  paymentMethod:'Pix'|'Cartão';
+  total:number;
+};
 
 export function StorefrontPage(){ const {confirm:confirmAction}=useUi();
  const checkoutLock=useRef(false);
@@ -27,13 +35,14 @@ export function StorefrontPage(){ const {confirm:confirmAction}=useUi();
  const [store,setStore]=useState<Store|null>(null),[products,setProducts]=useState<Product[]>([]),[categories,setCategories]=useState<Category[]>([]),[zones,setZones]=useState<DeliveryZone[]>([]);
  const [initialLoading,setInitialLoading]=useState(true),[storeLoadError,setStoreLoadError]=useState('');
  const [cart,setCart]=useState<CartItem[]>([]),[cartReady,setCartReady]=useState(false),[open,setOpen]=useState(false),[search,setSearch]=useState(''),[category,setCategory]=useState('all'),[selectedProduct,setSelectedProduct]=useState<Product|null>(null),[favorites,setFavorites]=useState<string[]>([]),[favoriteOnly,setFavoriteOnly]=useState(false),[galleryIndex,setGalleryIndex]=useState(0),[sort,setSort]=useState<'featured'|'price_asc'|'price_desc'|'name'>('featured');
- const [payment,setPayment]=useState('Pix'),[delivery,setDelivery]=useState<'pickup'|'delivery'>('pickup');
+ const [payment,setPayment]=useState(''),[delivery,setDelivery]=useState<'pickup'|'delivery'>('pickup');
  const [cashChangeFor,setCashChangeFor]=useState('');
  const [customer,setCustomer]=useState({name:'',phone:'',email:'',address:'',notes:''}); const [deliveryZoneId,setDeliveryZoneId]=useState(''); const [couponCode,setCouponCode]=useState(''); const [quote,setQuote]=useState<any>(null); const [quoteMsg,setQuoteMsg]=useState('');
  const [sending,setSending]=useState(false),[done,setDone]=useState(''),[error,setError]=useState(''),[lastOrderId,setLastOrderId]=useState('');
  const [selectedVariant,setSelectedVariant]=useState<ProductVariant|null>(null);
  const [selectedAddons,setSelectedAddons]=useState<Record<string,string[]>>({});
  const [pix,setPix]=useState<PixData|null>(null),[pixCopied,setPixCopied]=useState(false),[cardStage,setCardStage]=useState<CardStage|null>(null);
+ const [paymentResult,setPaymentResult]=useState<PaymentResult|null>(null);
  const [sharePayload,setSharePayload]=useState<{title:string;text:string;url:string}|null>(null);
 
  useEffect(()=>{let active=true;(async()=>{
@@ -63,6 +72,46 @@ export function StorefrontPage(){ const {confirm:confirmAction}=useUi();
  useEffect(()=>{if(!store||!cartReady)return;try{localStorage.setItem(`vitrio:cart:${store.slug}`,JSON.stringify(cart.map(i=>({productId:i.product.id,variantId:i.variant?.id||'',addonOptionIds:(i.addons||[]).map(a=>a.optionId),quantity:i.quantity}))))}catch{}},[cart,store,cartReady]);
  useEffect(()=>{if(!store)return;try{const raw=localStorage.getItem(`vitrio:favorites:${store.slug}`);setFavorites(raw?JSON.parse(raw):[])}catch{}},[store]);
  useEffect(()=>{if(!store)return;try{localStorage.setItem(`vitrio:favorites:${store.slug}`,JSON.stringify(favorites))}catch{}},[favorites,store]);
+
+ // Acompanha em tempo real a confirmação do pagamento Mercado Pago.
+ useEffect(()=>{
+   if(!lastOrderId)return;
+
+   const unsubscribe=onSnapshot(doc(db,'orders',lastOrderId),(snapshot)=>{
+     if(!snapshot.exists())return;
+
+     const order=snapshot.data();
+     const paymentStatus=String(order.paymentStatus||'').toLowerCase();
+
+     if(paymentStatus==='paid'){
+       setPix(null);
+       setCardStage(null);
+
+       setPaymentResult(current=>current?{
+         ...current,
+         status:'paid',
+         statusDetail:String(order.mercadoPagoStatusDetail||current.statusDetail||'')
+       }:current);
+
+       setDone(`Pagamento confirmado! Pedido #${lastOrderId.slice(0,6).toUpperCase()} recebido pela loja.`);
+     }
+
+     if(paymentStatus==='failed'){
+       setPix(null);
+       setError('O pagamento não foi aprovado pelo Mercado Pago. Tente novamente.');
+     }
+
+     if(paymentStatus==='refunded'){
+       setPix(null);
+       setDone('');
+       setError('Este pagamento foi estornado.');
+     }
+   },(err)=>{
+     console.error('[Vitrio pagamento realtime]',err);
+   });
+
+   return()=>unsubscribe();
+ },[lastOrderId]);
  useEffect(()=>{if(products.length===0)return;const id=new URLSearchParams(window.location.search).get('produto');if(!id)return;const p=products.find(x=>x.id===id);if(p){setGalleryIndex(0);setSelectedVariant(null);setSelectedAddons({});setSelectedProduct(p)}},[products]);
  useEffect(()=>{if(!selectedProduct||!store)return;const pickupAllowed=store.allowPickup!==false&&selectedProduct.availableForPickup!==false;const deliveryAllowed=store.allowDelivery!==false&&selectedProduct.availableForDelivery!==false;if(pickupAllowed&&!deliveryAllowed&&delivery!=='pickup'){setDelivery('pickup');setQuote(null)}else if(deliveryAllowed&&!pickupAllowed&&delivery!=='delivery'){setDelivery('delivery');setQuote(null)}else if(delivery==='pickup'&&!pickupAllowed&&deliveryAllowed){setDelivery('delivery');setQuote(null)}else if(delivery==='delivery'&&!deliveryAllowed&&pickupAllowed){setDelivery('pickup');setQuote(null)}},[selectedProduct,store,delivery]);
 
@@ -138,7 +187,7 @@ export function StorefrontPage(){ const {confirm:confirmAction}=useUi();
    setError('');
 
    try{
-     const created=await createValidatedOrder();
+     const created=await createValidatedOrder('whatsapp');
 
      const lines=cart.map(i=>`• ${i.quantity}x ${i.product.name}${i.variant?` (${i.variant.name})`:''}${(i.addons||[]).length?` [${i.addons!.map(a=>`${a.groupName}: ${a.optionName}`).join(', ')}]`:''} — ${money(itemPrice(i)*i.quantity)}`);
      const changeLine=payment==='Dinheiro'
@@ -167,8 +216,12 @@ export function StorefrontPage(){ const {confirm:confirmAction}=useUi();
 
      const waUrl=`https://wa.me/${phone}?text=${encodeURIComponent(textMessage)}`;
 
-     setDone(`Pedido #${created.orderId.slice(0,6).toUpperCase()} registrado, estoque e financeiro atualizados. Abrindo o WhatsApp...`);
-     setLastOrderId(created.orderId);
+     setDone(`Pedido #${created.orderId.slice(0,6).toUpperCase()} registrado. Aguardando confirmação do pagamento pela loja. Abrindo o WhatsApp...`);
+     // Checkout WhatsApp é convencional: não monitora Mercado Pago.
+     setLastOrderId('');
+     setPaymentResult(null);
+     setPix(null);
+     setCardStage(null);
 
      // Limpa o carrinho imediatamente após o pedido ser confirmado.
      // Também remove a cópia persistida no navegador para que, ao voltar do WhatsApp,
@@ -192,13 +245,13 @@ export function StorefrontPage(){ const {confirm:confirmAction}=useUi();
    }
  };
 
- async function createValidatedOrder(){
+ async function createValidatedOrder(checkoutSource: 'whatsapp' | 'system'){
    if(!store)throw new Error('Loja indisponível.');
    const createOrder=httpsCallable(functions,'createOrder');
    const res:any=await createOrder({
      storeId:store.id,customerName:customer.name.trim(),customerPhone:customer.phone.trim(),
      fulfillment:delivery,address:delivery==='delivery'?customer.address.trim():'',
-     paymentMethod:payment,customerEmail:customer.email.trim(),customerNotes:customer.notes.trim(),couponCode:couponCode.trim(),deliveryZoneId:delivery==='delivery'?deliveryZoneId:'',checkoutSource:'whatsapp',cashChangeFor:cashChangeFor.trim(),items:cart.map(i=>({productId:i.product.id,variantId:i.variant?.id||'',addonOptionIds:(i.addons||[]).map(a=>a.optionId),quantity:i.quantity}))
+     paymentMethod:payment,customerEmail:customer.email.trim(),customerNotes:customer.notes.trim(),couponCode:couponCode.trim(),deliveryZoneId:delivery==='delivery'?deliveryZoneId:'',checkoutSource,cashChangeFor:cashChangeFor.trim(),items:cart.map(i=>({productId:i.product.id,variantId:i.variant?.id||'',addonOptionIds:(i.addons||[]).map(a=>a.optionId),quantity:i.quantity}))
    });
    return {orderId:String(res.data.orderId),total:Number(res.data.total)};
  }
@@ -217,56 +270,213 @@ export function StorefrontPage(){ const {confirm:confirmAction}=useUi();
  async function systemCheckout(e:FormEvent){
    e.preventDefault();
    if(checkoutLock.current)return;
-   if(!store||!customer.name.trim()||!customer.phone.trim()||cart.length===0)return;
-   if(Number(store.minOrderValue||0)>0&&subtotal<Number(store.minOrderValue)){setError(`O pedido mínimo desta loja é ${money(Number(store.minOrderValue))}.`);return;}
-   if(delivery==='delivery'&&!customer.address.trim())return;
-   if((payment==='Pix'||payment==='Cartão')&&!customer.email.trim()){setError('Informe seu e-mail para o pagamento online.');return;}
-   if((payment==='Pix'||payment==='Cartão')&&!onlineConnected){setError('Esta loja ainda não conectou o Mercado Pago. Escolha outra forma ou finalize pelo WhatsApp.');return;}
 
-   checkoutLock.current=true;setSending(true);setError('');setDone('');setPix(null);setCardStage(null);
+   if(!store||cart.length===0)return;
+
+   if(!payment){
+     setError('Escolha uma forma de pagamento para continuar.');
+     return;
+   }
+
+   if(!customer.name.trim()){
+     setError('Informe seu nome para continuar.');
+     return;
+   }
+
+   if(!customer.phone.trim()){
+     setError('Informe seu WhatsApp para continuar.');
+     return;
+   }
+
+   if(Number(store.minOrderValue||0)>0&&subtotal<Number(store.minOrderValue)){
+     setError(`O pedido mínimo desta loja é ${money(Number(store.minOrderValue))}.`);
+     return;
+   }
+
+   if(delivery==='delivery'&&!customer.address.trim()){
+     setError('Informe o endereço de entrega.');
+     return;
+   }
+
+   if(delivery==='delivery'&&zones.length>0&&!deliveryZoneId){
+     setError('Selecione o bairro / região da entrega.');
+     return;
+   }
+
+   /*
+    * O checkout online do Mercado Pago compreende Pix e Cartão.
+    * Dinheiro é um pedido convencional, sem processamento pelo MP.
+    */
+   const isMercadoPagoPayment = payment==='Pix'||payment==='Cartão';
+
+   if(isMercadoPagoPayment&&!customer.email.trim()){
+     setError('Informe seu e-mail para realizar o pagamento online.');
+     return;
+   }
+
+   if(isMercadoPagoPayment&&!onlineConnected){
+     setError('Esta loja ainda não conectou o Mercado Pago. Escolha outra forma ou finalize pelo WhatsApp.');
+     return;
+   }
+
+   if(payment==='Cartão'&&!store.mercadoPagoPublicKey){
+     setError('A conexão da loja precisa ser renovada para liberar pagamentos com cartão.');
+     return;
+   }
+
+   checkoutLock.current=true;
+   setSending(true);
+   setError('');
+   setDone('');
+   setPix(null);
+   setCardStage(null);
+   setPaymentResult(null);
+
    try{
-     const order=await createValidatedOrder();setLastOrderId(order.orderId);
+     const order=await createValidatedOrder('system');
+     setLastOrderId(order.orderId);
+
      if(payment==='Dinheiro'){
        setDone(`Pedido #${order.orderId.slice(0,6).toUpperCase()} recebido! Pagamento na entrega/retirada.`);
-       setCart([]);return;
+       setCart([]);
+       setQuote(null);
+       setCouponCode('');
+       setCashChangeFor('');
+       return;
      }
+
      if(payment==='Pix'){
-       const pay=httpsCallable(functions,'createMercadoPagoPayment');
-       const res:any=await pay({orderId:order.orderId,payerEmail:customer.email.trim(),kind:'pix'});
-       setPix(res.data.pix||null);
-       setDone(`Pedido #${order.orderId.slice(0,6).toUpperCase()} criado. Faça o Pix para confirmar.`);
-       setCart([]);return;
+      console.log('[VITRIO PIX] 1 - Pedido criado:', order);
+
+      const pay=httpsCallable(functions,'createMercadoPagoPayment');
+
+      console.log('[VITRIO PIX] 2 - Chamando createMercadoPagoPayment...', {
+        orderId:order.orderId,
+        payerEmail:customer.email.trim(),
+        kind:'pix'
+      });
+
+      const res:any=await pay({
+        orderId:order.orderId,
+        payerEmail:customer.email.trim(),
+        kind:'pix'
+      });
+
+      console.log('[VITRIO PIX] 3 - Resposta recebida:', res.data);
+
+      const pixData=res.data?.pix;
+
+      console.log('[VITRIO PIX] 4 - Dados Pix:', pixData);
+
+      if(!pixData?.qrCode&&!pixData?.qrCodeBase64&&!pixData?.ticketUrl){
+        throw new Error('O Mercado Pago não retornou os dados necessários para concluir o Pix.');
+      }
+
+      setPix(pixData);
+
+      setPaymentResult({
+        orderId:order.orderId,
+        mercadoPagoOrderId:String(res.data?.mercadoPagoOrderId||''),
+        status:String(res.data?.status||'pending'),
+        statusDetail:String(res.data?.statusDetail||''),
+        paymentMethod:'Pix',
+        total:order.total
+      });
+
+      setDone(`Pedido #${order.orderId.slice(0,6).toUpperCase()} criado. Realize o pagamento abaixo para confirmar.`);
+      setCart([]);
+      setQuote(null);
+      setCouponCode('');
+      return;
+    }
+
+    if(payment==='Cartão'){
+       /*
+        * O pedido foi criado, mas o carrinho ainda NÃO é limpo.
+        * Primeiro abrimos o Brick do Mercado Pago.
+        */
+       setCardStage({
+         orderId:order.orderId,
+         total:order.total,
+         publicKey:store.mercadoPagoPublicKey!,
+         email:customer.email.trim()
+       });
+
+       setDone('');
+       return;
      }
-     if(payment==='Cartão'){
-       if(!store.mercadoPagoPublicKey)throw new Error('A conexão da loja precisa ser renovada para liberar o cartão.');
-       setCardStage({orderId:order.orderId,total:order.total,publicKey:store.mercadoPagoPublicKey,email:customer.email.trim()});
-     }
+
+     throw new Error('Forma de pagamento não reconhecida.');
+
    }catch(err:any){
      setError(friendlyCheckoutError(err));
-   }finally{checkoutLock.current=false;setSending(false)}
+   }finally{
+     checkoutLock.current=false;
+     setSending(false);
+   }
  }
 
  const submitCard=useCallback(async(formData:any)=>{
    if(!cardStage)return;
+
    setError('');
+
    try{
      const pay=httpsCallable(functions,'createMercadoPagoPayment');
+
      const res:any=await pay({
-       orderId:cardStage.orderId,payerEmail:cardStage.email,kind:'card',
+       orderId:cardStage.orderId,
+       payerEmail:cardStage.email,
+       kind:'card',
        card:{
          token:formData?.token,
          paymentMethodId:formData?.payment_method_id,
          installments:formData?.installments,
        }
      });
-     if(res.data?.status==='paid'){
+
+     const status=String(res.data?.status||'').toLowerCase();
+
+     setPaymentResult({
+       orderId:cardStage.orderId,
+       mercadoPagoOrderId:String(res.data?.mercadoPagoOrderId||''),
+       status,
+       statusDetail:String(res.data?.statusDetail||''),
+       paymentMethod:'Cartão',
+       total:cardStage.total
+     });
+
+     if(status==='paid'){
        setDone(`Pagamento aprovado! Pedido #${cardStage.orderId.slice(0,6).toUpperCase()} confirmado.`);
-       setCart([]);setCardStage(null);
-     }else{
-       setDone(`Pagamento enviado. Pedido #${cardStage.orderId.slice(0,6).toUpperCase()} está sendo processado.`);
-       setCart([]);setCardStage(null);
+       setCart([]);
+       setQuote(null);
+       setCouponCode('');
+       setCardStage(null);
+       return;
      }
-   }catch(e:any){setError(e?.message?.replace('FirebaseError: ','')||'O cartão não pôde ser processado.');throw e;}
+
+     if(['pending','processing','in_process','action_required'].includes(status)){
+       setDone(`Pagamento recebido pelo Mercado Pago. Pedido #${cardStage.orderId.slice(0,6).toUpperCase()} está aguardando confirmação.`);
+       setCart([]);
+       setQuote(null);
+       setCouponCode('');
+       setCardStage(null);
+       return;
+     }
+
+     throw new Error(
+       res.data?.statusDetail
+         ? `Pagamento não aprovado: ${res.data.statusDetail}`
+         : 'O Mercado Pago não aprovou o pagamento. Revise os dados e tente novamente.'
+     );
+
+   }catch(e:any){
+     setError(
+       e?.message?.replace('FirebaseError: ','')||
+       'Não foi possível processar o pagamento com cartão.'
+     );
+     throw e;
+   }
  },[cardStage]);
 
  async function copyPix(){
@@ -316,15 +526,119 @@ export function StorefrontPage(){ const {confirm:confirmAction}=useUi();
        {(mode==='online'||mode==='both')&&<label>E-mail<input type="email" value={customer.email} onChange={e=>setCustomer({...customer,email:e.target.value})} placeholder="Para pagamento online"/></label>}
        <label>Recebimento<select value={delivery} onChange={e=>{setDelivery(e.target.value as 'pickup'|'delivery');setQuote(null)}}>{store.allowPickup!==false&&<option value="pickup">Retirada na loja</option>}{store.allowDelivery!==false&&<option value="delivery">Entrega</option>}</select></label>{delivery==='delivery'&&zones.length>0&&<label>Bairro / região<select value={deliveryZoneId} onChange={e=>{setDeliveryZoneId(e.target.value);setQuote(null)}} required><option value="">Selecione...</option>{zones.map(z=><option value={z.id} key={z.id}>{z.name} · {money(z.fee)}</option>)}</select></label>}
        {delivery==='delivery'&&<label>Endereço de entrega<textarea required={mode!=='whatsapp'} value={customer.address} onChange={e=>setCustomer({...customer,address:e.target.value})}/></label>}<label>Observações do pedido<textarea maxLength={500} value={customer.notes} onChange={e=>setCustomer({...customer,notes:e.target.value})} placeholder="Ex.: entregar na portaria, sem embalagem para presente..."/></label>
-       <label>Forma de pagamento<select value={payment} onChange={e=>{setPayment(e.target.value);if(e.target.value!=='Dinheiro')setCashChangeFor('')}}>{paymentOptions.map(p=><option key={p}>{p}</option>)}</select></label>
+       <div className="payment-method-picker">
+         <strong>Forma de pagamento</strong>
+         <small>Escolha como deseja pagar</small>
+
+         <div className="payment-method-options">
+           {paymentOptions.map(option=>(
+             <button
+               key={option}
+               type="button"
+               className={payment===option?'active':''}
+               onClick={()=>{
+                 setPayment(option);
+                 setError('');
+                 setPix(null);
+                 setCardStage(null);
+                 setPaymentResult(null);
+                 if(option!=='Dinheiro')setCashChangeFor('');
+               }}
+             >
+               <span>{option}</span>
+               <small>
+                 {option==='Pix'
+                   ? 'Pagamento online'
+                   : option==='Cartão'
+                     ? 'Crédito'
+                     : 'Na entrega ou retirada'}
+               </small>
+             </button>
+           ))}
+         </div>
+       </div>
 
      </div>
      <div className="coupon-row storefront-coupon-row"><input placeholder="Cupom de desconto" value={couponCode} onChange={e=>{setCouponCode(e.target.value.toUpperCase());setQuote(null)}}/><button type="button" className="secondary-btn" onClick={refreshQuote}>Aplicar</button></div>{quoteMsg&&<small className="integration-note">{quoteMsg}</small>}{Number(store.minOrderValue||0)>0&&subtotal<Number(store.minOrderValue)&&<div className="minimum-order-note">Faltam {money(Number(store.minOrderValue)-subtotal)} para atingir o pedido mínimo de {money(Number(store.minOrderValue))}.</div>}<div className="totals"><span>Subtotal <strong>{money(quote?.subtotal??subtotal)}</strong></span>{Number(quote?.discount||0)>0&&<span>Desconto <strong>- {money(Number(quote.discount))}</strong></span>}{Number(quote?.deliveryFee??fee)>0&&<span>Entrega <strong>{money(Number(quote?.deliveryFee??fee))}</strong></span>}{payment==='Dinheiro'&&<div className="cash-change-summary"><label>Troco para quanto?<input inputMode="decimal" placeholder={`Mínimo ${money(Number(quote?.total??total))}`} value={cashChangeFor} onChange={e=>setCashChangeFor(e.target.value.replace(/[^0-9.,]/g,''))}/><small>Opcional. Se informar, o valor deve ser igual ou maior que o total.</small></label></div>}<span className="grand-total">Total <strong>{money(Number(quote?.total??total))}</strong></span></div>
-     <div className="checkout-actions">
-       {(mode==='whatsapp'||mode==='both')&&<button type="button" className="whatsapp-btn" onClick={whatsapp} disabled={sending}>{sending?'Registrando pedido...':'Finalizar pelo WhatsApp'}</button>}
-       {(mode==='online'||mode==='both')&&<button className="primary-btn full" disabled={sending}>{sending?'Processando...':payment==='Dinheiro'?'Fazer pedido':'Pagar pelo Vitrio'}</button>}
-     </div>
-     {(payment==='Pix'||payment==='Cartão')&&(mode==='online'||mode==='both')&&<small className="integration-note">{onlineConnected?'Pagamento processado diretamente na conta Mercado Pago desta loja.':'Esta loja precisa conectar o Mercado Pago para receber pagamentos online.'}</small>}
+      <div className="checkout-actions">
+
+        {(mode === 'online' || mode === 'both') && (
+          <div className="checkout-option checkout-option-online">
+            <div className="checkout-option-info">
+              <strong>
+                {!payment
+                  ? 'Escolha a forma de pagamento'
+                  : payment === 'Pix'
+                    ? 'Pagamento via Pix'
+                    : payment === 'Cartão'
+                      ? 'Pagamento com cartão'
+                      : 'Pagamento na entrega ou retirada'}
+              </strong>
+
+              <small>
+                {!payment
+                  ? 'Selecione Pix, cartão ou dinheiro para continuar.'
+                  : payment === 'Pix'
+                    ? 'O QR Code Pix será gerado com segurança pelo Mercado Pago.'
+                    : payment === 'Cartão'
+                      ? 'Você preencherá os dados do cartão no ambiente seguro do Mercado Pago.'
+                      : 'Seu pedido será registrado agora e o pagamento será feito em dinheiro.'}
+              </small>
+            </div>
+
+            <button
+              type="submit"
+              className="primary-btn checkout-main-button"
+              disabled={
+                sending ||
+                !payment ||
+                ((payment === 'Pix' || payment === 'Cartão') && !onlineConnected)
+              }
+            >
+              {sending
+                ? 'Processando...'
+                : !payment
+                  ? 'Escolha a forma de pagamento'
+                  : payment === 'Pix'
+                    ? 'Gerar QR Code Pix'
+                    : payment === 'Cartão'
+                      ? 'Continuar para pagamento'
+                      : 'Finalizar pedido'}
+            </button>
+
+            {(payment === 'Pix' || payment === 'Cartão') && (
+              <small className="integration-note checkout-security-note">
+                {onlineConnected
+                  ? 'Pagamento processado pelo Mercado Pago diretamente na conta desta loja.'
+                  : 'Pagamento online temporariamente indisponível nesta loja.'}
+              </small>
+            )}
+          </div>
+        )}
+
+        {mode === 'whatsapp' && (
+          <div className="checkout-option checkout-option-whatsapp">
+            <div className="checkout-option-info">
+              <strong>Finalizar pedido pelo WhatsApp</strong>
+
+              <small>
+                Envie seu pedido diretamente para a loja e combine o pagamento,
+                a entrega ou a retirada pelo WhatsApp.
+              </small>
+            </div>
+
+            <button
+              type="button"
+              className="whatsapp-btn checkout-main-button"
+              onClick={whatsapp}
+              disabled={sending}
+            >
+              {sending ? 'Registrando pedido...' : 'Enviar pedido pelo WhatsApp'}
+            </button>
+          </div>
+        )}
+
+      </div>
    </form>}
  </aside></div>}
  <ShareSheet payload={sharePayload} onClose={()=>setSharePayload(null)}/>

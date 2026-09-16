@@ -83,6 +83,35 @@ export function HomePage(){
       </section>
     </main>
 
-    <footer className="marketing-footer"><div className="marketing-brand"><span>V</span><strong>Vitrio</strong></div><small>Seu comércio em um link.</small></footer>
+    <footer className="marketing-footer">
+      <div className="marketing-footer-main">
+        <div className="marketing-footer-about">
+          <div className="marketing-brand">
+            <span>V</span>
+            <strong>Vitrio</strong>
+          </div>
+          <p>Seu comércio em um link.</p>
+          <small>Uma forma simples de criar sua vitrine, organizar seus pedidos e vender online.</small>
+        </div>
+
+        <div className="marketing-footer-column">
+          <strong>Vitrio</strong>
+          <a href="#recursos">Recursos</a>
+          <a href="#como-funciona">Como funciona</a>
+          <a href="/login">Entrar</a>
+        </div>
+
+        <div className="marketing-footer-column">
+          <strong>Comece agora</strong>
+          <a href="/cadastro">Criar minha loja</a>
+          <a href="/login">Acessar minha conta</a>
+        </div>
+      </div>
+
+      <div className="marketing-footer-bottom">
+        <span>© 2026 IDEIA LTDA. Todos os direitos reservados.</span>
+        <span>Vitrio · Seu comércio em um link.</span>
+      </div>
+    </footer>
   </div>
 }

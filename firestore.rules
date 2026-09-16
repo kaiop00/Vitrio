@@ -26,6 +26,7 @@ service cloud.firestore {
   match /platformSettings/{id}{allow read:if signedIn();allow write:if isAdmin();}
   match /subscriptionPayments/{id}{allow read:if isAdmin()||isMerchantOf(resource.data.storeId);allow create:if isMerchantOf(request.resource.data.storeId);allow update,delete:if isAdmin();}
   match /supportTickets/{id}{allow read:if isAdmin()||isMerchantOf(resource.data.storeId);allow create:if isMerchantOf(request.resource.data.storeId)&&request.resource.data.userId==request.auth.uid;allow update,delete:if isAdmin();}
-  match /storePaymentSecrets/{storeId}{allow read,write:if false;}match /mercadoPagoOauthStates/{state}{allow read,write:if false;}
+  match /pushDevices/{deviceId}{allow read,write:if false;}
+   match /storePaymentSecrets/{storeId}{allow read,write:if false;}match /mercadoPagoOauthStates/{state}{allow read,write:if false;}
  }
 }

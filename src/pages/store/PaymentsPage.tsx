@@ -40,6 +40,8 @@ export function PaymentsPage() {
   const [billing, setBilling] = useState<Billing>({});
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [message, setMessage] = useState('');
   const [qr, setQr] = useState('');
   const [tab, setTab] = useState<'sales' | 'subscription'>('sales');
@@ -57,30 +59,60 @@ export function PaymentsPage() {
   }
 
   useEffect(() => {
+    let active = true;
+
+    const withTimeout = <T,>(promise: Promise<T>, ms = 10000) =>
+      Promise.race<T>([
+        promise,
+        new Promise<T>((_, reject) =>
+          window.setTimeout(
+            () => reject(new Error('Tempo limite excedido ao carregar os dados.')),
+            ms
+          )
+        ),
+      ]);
+
     (async () => {
       if (!profile?.storeId) {
-        setLoading(false);
+        if (active) setLoading(false);
         return;
       }
 
+      setLoading(true);
+      setMessage('');
+
       try {
-        await loadStore();
+        await withTimeout(loadStore());
 
         try {
-          const b = await getDoc(doc(db, 'platformSettings', 'billing'));
-          setBilling(b.exists() ? (b.data() as Billing) : {});
-        } catch {
-          setBilling({
-            billingWhatsapp: '88888499692',
-          });
+          const b = await withTimeout(
+            getDoc(doc(db, 'platformSettings', 'billing'))
+          );
+
+          if (active) {
+            setBilling(b.exists() ? (b.data() as Billing) : {});
+          }
+        } catch (billingError) {
+          console.warn('Falha ao carregar configuração de cobrança:', billingError);
+
+          if (active) {
+            setBilling({
+              billingWhatsapp: '88888499692',
+            });
+          }
         }
 
         const params = new URLSearchParams(window.location.search);
         const mp = params.get('mp');
 
         if (mp === 'connected') {
-          setMessage('Mercado Pago conectado com sucesso. Sua loja já pode receber pagamentos integrados.');
-          await loadStore();
+          if (active) {
+            setMessage(
+              'Mercado Pago conectado com sucesso. Sua loja já pode receber pagamentos integrados.'
+            );
+          }
+
+          await withTimeout(loadStore());
 
           params.delete('mp');
           const query = params.toString();
@@ -93,7 +125,11 @@ export function PaymentsPage() {
         }
 
         if (mp === 'error') {
-          setMessage('Não foi possível concluir a conexão com o Mercado Pago. Tente novamente.');
+          if (active) {
+            setMessage(
+              'Não foi possível concluir a conexão com o Mercado Pago. Tente novamente.'
+            );
+          }
 
           params.delete('mp');
           const query = params.toString();
@@ -105,15 +141,23 @@ export function PaymentsPage() {
           );
         }
       } catch (e: any) {
-        setMessage(
-          String(
-            e?.message || 'Não foi possível carregar os dados da loja.'
-          ).replace('FirebaseError: ', '')
-        );
+        console.error('Erro ao carregar Pagamentos:', e);
+
+        if (active) {
+          setMessage(
+            String(
+              e?.message || 'Não foi possível carregar os dados da loja.'
+            ).replace('FirebaseError: ', '')
+          );
+        }
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     })();
+
+    return () => {
+      active = false;
+    };
   }, [profile?.storeId]);
 
   const amount = useMemo(
@@ -146,6 +190,36 @@ export function PaymentsPage() {
       margin: 2,
     }).then(setQr);
   }, [payload]);
+
+  async function disconnectMercadoPago() {
+    if (disconnecting) return;
+
+    setDisconnecting(true);
+    setMessage('');
+
+    try {
+      const fn = httpsCallable(functions, 'disconnectMercadoPago');
+      await fn({});
+
+      await loadStore();
+
+      setConfirmDisconnect(false);
+      setMessage(
+        'Mercado Pago desconectado. Seus pedidos e pagamentos anteriores foram preservados.'
+      );
+    } catch (e: any) {
+      console.error(e);
+
+      setMessage(
+        String(
+          e?.message ||
+            'Não foi possível desconectar o Mercado Pago.'
+        ).replace('FirebaseError: ', '')
+      );
+    } finally {
+      setDisconnecting(false);
+    }
+  }
 
   async function connectMercadoPago() {
     if (connecting) return;
@@ -215,6 +289,54 @@ export function PaymentsPage() {
 
   return (
     <>
+      {confirmDisconnect && (
+        <div className="modal-backdrop">
+          <div className="panel mp-disconnect-modal" role="dialog" aria-modal="true">
+            <h2>Desconectar Mercado Pago?</h2>
+
+            <p>
+              Novos pagamentos integrados serão desativados e o checkout
+              voltará para WhatsApp.
+            </p>
+
+            <div className="connection-tip">
+              <ShieldCheck />
+
+              <div>
+                <strong>Seus dados serão preservados</strong>
+                <p>
+                  Pedidos e pagamentos anteriores continuarão disponíveis,
+                  incluindo os identificadores das transações já realizadas.
+                  Você poderá conectar o Mercado Pago novamente quando quiser.
+                </p>
+              </div>
+            </div>
+
+            <div className="mp-disconnect-modal-actions">
+              <button
+                type="button"
+                className="secondary-btn"
+                onClick={() => setConfirmDisconnect(false)}
+                disabled={disconnecting}
+              >
+                Cancelar
+              </button>
+
+              <button
+                type="button"
+                className="secondary-btn danger-action"
+                onClick={disconnectMercadoPago}
+                disabled={disconnecting}
+              >
+                {disconnecting
+                  ? 'Desconectando...'
+                  : 'Desconectar Mercado Pago'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="page-head">
         <div>
           <h1>Pagamentos</h1>
@@ -292,17 +414,28 @@ export function PaymentsPage() {
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  className="secondary-btn"
-                  onClick={connectMercadoPago}
-                  disabled={connecting}
-                >
-                  <RefreshCw />
-                  {connecting
-                    ? 'Abrindo Mercado Pago...'
-                    : 'Reconectar Mercado Pago'}
-                </button>
+                <div className="mp-connection-actions">
+                  <button
+                    type="button"
+                    className="secondary-btn"
+                    onClick={connectMercadoPago}
+                    disabled={connecting || disconnecting}
+                  >
+                    <RefreshCw />
+                    {connecting
+                      ? 'Abrindo Mercado Pago...'
+                      : 'Reconectar Mercado Pago'}
+                  </button>
+
+                  <button
+                    type="button"
+                    className="secondary-btn danger-action"
+                    onClick={() => setConfirmDisconnect(true)}
+                    disabled={connecting || disconnecting}
+                  >
+                    Desconectar Mercado Pago
+                  </button>
+                </div>
               </>
             ) : (
               <>
