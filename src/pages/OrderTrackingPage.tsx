@@ -15,7 +15,7 @@ import {
 import { Link, useParams } from 'react-router-dom';
 import { functions } from '../lib/firebase';
 
-const steps=[
+const deliverySteps=[
   {key:'paid',label:'Pedido confirmado',icon:CheckCircle2},
   {key:'preparing',label:'Em preparação',icon:Clock3},
   {key:'ready',label:'Pronto',icon:PackageCheck},
@@ -23,7 +23,12 @@ const steps=[
   {key:'completed',label:'Concluído',icon:CheckCircle2},
 ];
 
-const flow=['paid','preparing','ready','out_for_delivery','completed'];
+const pickupSteps=[
+  {key:'paid',label:'Pedido confirmado',icon:CheckCircle2},
+  {key:'preparing',label:'Em preparação',icon:Clock3},
+  {key:'ready',label:'Pronto para retirada',icon:PackageCheck},
+  {key:'completed',label:'Retirado',icon:CheckCircle2},
+];
 
 const money=(v:number)=>
   Number(v||0).toLocaleString('pt-BR',{
@@ -69,10 +74,17 @@ export function OrderTrackingPage(){
     }
   }
 
+  const trackingSteps =
+    data?.fulfillment === 'pickup'
+      ? pickupSteps
+      : deliverySteps;
+
+  const trackingFlow = trackingSteps.map(step => step.key);
+
   const current=
     data?.status==='pending_payment'
       ? -1
-      : flow.indexOf(data?.status);
+      : trackingFlow.indexOf(data?.status);
 
   const paymentPaid=
     String(data?.paymentStatus||'').toLowerCase()==='paid';
@@ -230,7 +242,7 @@ export function OrderTrackingPage(){
               )
               :(
                 <div className="tracking-timeline">
-                  {steps.map((s,i)=>{
+                  {trackingSteps.map((s,i)=>{
                     const Icon=s.icon;
                     const active=i<=current;
                     const now=i===current;
