@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { collection, doc, getDocs, onSnapshot, query, where } from 'firebase/firestore';
+import { collection, getDocs, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { ArrowUpDown, BadgePercent, Check, Clock3, Copy, Heart, Info, Minus, Plus, Search, Share2, ShoppingBag, Star, X } from 'lucide-react';
 import { db, functions } from '../../lib/firebase';
@@ -25,7 +25,7 @@ type PaymentResult={
   mercadoPagoOrderId:string;
   status:string;
   statusDetail?:string;
-  paymentMethod:'Pix'|'Cartão';
+  paymentMethod:'Pix'|'Cartão'|'Cartão de crédito'|'Cartão de débito';
   total:number;
 };
 
@@ -73,45 +73,70 @@ export function StorefrontPage(){ const {confirm:confirmAction}=useUi();
  useEffect(()=>{if(!store)return;try{const raw=localStorage.getItem(`vitrio:favorites:${store.slug}`);setFavorites(raw?JSON.parse(raw):[])}catch{}},[store]);
  useEffect(()=>{if(!store)return;try{localStorage.setItem(`vitrio:favorites:${store.slug}`,JSON.stringify(favorites))}catch{}},[favorites,store]);
 
- // Acompanha em tempo real a confirmação do pagamento Mercado Pago.
+ // Acompanha a confirmação do Mercado Pago pela Function pública protegida
+ // por pedido + telefone. Não expõe a coleção orders no Firestore.
  useEffect(()=>{
-   if(!lastOrderId)return;
+   if(!lastOrderId||!customer.phone.trim())return;
 
-   const unsubscribe=onSnapshot(doc(db,'orders',lastOrderId),(snapshot)=>{
-     if(!snapshot.exists())return;
+   let active=true;
+   let checking=false;
 
-     const order=snapshot.data();
-     const paymentStatus=String(order.paymentStatus||'').toLowerCase();
+   const checkPayment=async()=>{
+     if(!active||checking)return;
+     checking=true;
 
-     if(paymentStatus==='paid'){
-       setPix(null);
-       setCardStage(null);
+     try{
+       const getTracking=httpsCallable(functions,'getPublicOrderTracking');
+       const res:any=await getTracking({
+         orderId:lastOrderId,
+         phone:customer.phone.trim()
+       });
 
-       setPaymentResult(current=>current?{
-         ...current,
-         status:'paid',
-         statusDetail:String(order.mercadoPagoStatusDetail||current.statusDetail||'')
-       }:current);
+       if(!active)return;
 
-       setDone(`Pagamento confirmado! Pedido #${lastOrderId.slice(0,6).toUpperCase()} recebido pela loja.`);
+       const order=res.data||{};
+       const paymentStatus=String(order.paymentStatus||'').toLowerCase();
+
+       if(paymentStatus==='paid'){
+         setPix(null);
+         setCardStage(null);
+
+         setPaymentResult(current=>current?{
+           ...current,
+           status:'paid'
+         }:current);
+
+         setDone(`Pagamento confirmado! Pedido #${lastOrderId.slice(0,6).toUpperCase()} recebido pela loja.`);
+         return;
+       }
+
+       if(paymentStatus==='failed'){
+         setPix(null);
+         setError('O pagamento não foi aprovado pelo Mercado Pago. Tente novamente.');
+         return;
+       }
+
+       if(paymentStatus==='refunded'){
+         setPix(null);
+         setDone('');
+         setError('Este pagamento foi estornado.');
+       }
+     }catch(err){
+       // Falha temporária de consulta não interrompe o checkout.
+       console.error('[Vitrio pagamento polling]',err);
+     }finally{
+       checking=false;
      }
+   };
 
-     if(paymentStatus==='failed'){
-       setPix(null);
-       setError('O pagamento não foi aprovado pelo Mercado Pago. Tente novamente.');
-     }
+   checkPayment();
+   const timer=window.setInterval(checkPayment,3000);
 
-     if(paymentStatus==='refunded'){
-       setPix(null);
-       setDone('');
-       setError('Este pagamento foi estornado.');
-     }
-   },(err)=>{
-     console.error('[Vitrio pagamento realtime]',err);
-   });
-
-   return()=>unsubscribe();
- },[lastOrderId]);
+   return()=>{
+     active=false;
+     window.clearInterval(timer);
+   };
+ },[lastOrderId,customer.phone]);
  useEffect(()=>{if(products.length===0)return;const id=new URLSearchParams(window.location.search).get('produto');if(!id)return;const p=products.find(x=>x.id===id);if(p){setGalleryIndex(0);setSelectedVariant(null);setSelectedAddons({});setSelectedProduct(p)}},[products]);
  useEffect(()=>{if(!selectedProduct||!store)return;const pickupAllowed=store.allowPickup!==false&&selectedProduct.availableForPickup!==false;const deliveryAllowed=store.allowDelivery!==false&&selectedProduct.availableForDelivery!==false;if(pickupAllowed&&!deliveryAllowed&&delivery!=='pickup'){setDelivery('pickup');setQuote(null)}else if(deliveryAllowed&&!pickupAllowed&&delivery!=='delivery'){setDelivery('delivery');setQuote(null)}else if(delivery==='pickup'&&!pickupAllowed&&deliveryAllowed){setDelivery('delivery');setQuote(null)}else if(delivery==='delivery'&&!deliveryAllowed&&pickupAllowed){setDelivery('pickup');setQuote(null)}},[selectedProduct,store,delivery]);
 
@@ -124,7 +149,14 @@ export function StorefrontPage(){ const {confirm:confirmAction}=useUi();
  const cartKey=(p:Product,variant?:ProductVariant,addons:AddonSelection[]=[])=>`${p.id}::${variant?.id||''}::${addons.map(a=>a.optionId).sort().join(',')}`;
  const resolveAddons=(p:Product)=>{const selections:AddonSelection[]=[];for(const group of (p.addonGroups||[])){const ids=selectedAddons[group.id]||[];const active=(group.options||[]).filter(o=>o.active!==false);if(group.required&&ids.length===0)throw new Error(`Escolha uma opção em ${group.name}.`);if(ids.length>Math.max(1,Number(group.maxSelections||1)))throw new Error(`Escolha no máximo ${Math.max(1,Number(group.maxSelections||1))} opção(ões) em ${group.name}.`);for(const id of ids){const option=active.find(o=>o.id===id);if(option)selections.push({groupId:group.id,groupName:group.name,optionId:option.id,optionName:option.name,price:Number(option.price||0)});}}return selections;};
  const subtotal=useMemo(()=>cart.reduce((sum,i)=>sum+itemPrice(i)*i.quantity,0),[cart]);
- const selectedZone=zones.find(z=>z.id===deliveryZoneId); const fee=delivery==='delivery'?(selectedZone?Number(selectedZone.fee):Number(store?.deliveryFee||0)):0,total=subtotal+fee;
+ const selectedZone=zones.find(z=>z.id===deliveryZoneId);
+ const useDefaultDeliveryFee=store?.deliveryFeeMode==='default';
+ const fee=delivery==='delivery'
+   ? (useDefaultDeliveryFee
+       ? Number(store?.deliveryFee||0)
+       : Number(selectedZone?.fee||0))
+   : 0;
+ const total=subtotal+fee;
  const mode: 'whatsapp'|'online'|'both' = store?.checkoutMode || 'whatsapp';
  const onlineConnected=store?.paymentProviderConnected===true;
 
@@ -156,7 +188,7 @@ export function StorefrontPage(){ const {confirm:confirmAction}=useUi();
      setOpen(true);
      return;
    }
-   if(delivery==='delivery'&&zones.length>0&&!deliveryZoneId){
+   if(delivery==='delivery'&&!useDefaultDeliveryFee&&zones.length>0&&!deliveryZoneId){
      setError('Selecione o bairro / região da entrega.');
      setOpen(true);
      return;
@@ -298,7 +330,7 @@ export function StorefrontPage(){ const {confirm:confirmAction}=useUi();
      return;
    }
 
-   if(delivery==='delivery'&&zones.length>0&&!deliveryZoneId){
+   if(delivery==='delivery'&&!useDefaultDeliveryFee&&zones.length>0&&!deliveryZoneId){
      setError('Selecione o bairro / região da entrega.');
      return;
    }
@@ -490,7 +522,11 @@ export function StorefrontPage(){ const {confirm:confirmAction}=useUi();
 
  const paymentOptions=[
    store.allowPix!==false&&'Pix',
-   store.allowCard!==false&&'Cartão',
+   ...(store.allowCard!==false
+     ? (onlineConnected
+         ? ['Cartão']
+         : ['Cartão de crédito','Cartão de débito'])
+     : []),
    store.allowCash!==false&&'Dinheiro'
  ].filter(Boolean) as string[];
  return <div className="storefront" style={{'--store-color':store.primaryColor||'#6d5dfc'} as React.CSSProperties}>
@@ -524,7 +560,7 @@ export function StorefrontPage(){ const {confirm:confirmAction}=useUi();
        <label>Seu nome<input required={mode!=='whatsapp'} value={customer.name} onChange={e=>setCustomer({...customer,name:e.target.value})}/></label>
        <label>WhatsApp<input required={mode!=='whatsapp'} inputMode="tel" maxLength={18} placeholder="(88) 9 9999 - 9999" value={customer.phone} onChange={e=>setCustomer({...customer,phone:formatBrPhone(e.target.value)})}/></label>
        {(mode==='online'||mode==='both')&&<label>E-mail<input type="email" value={customer.email} onChange={e=>setCustomer({...customer,email:e.target.value})} placeholder="Para pagamento online"/></label>}
-       <label>Recebimento<select value={delivery} onChange={e=>{setDelivery(e.target.value as 'pickup'|'delivery');setQuote(null)}}>{store.allowPickup!==false&&<option value="pickup">Retirada na loja</option>}{store.allowDelivery!==false&&<option value="delivery">Entrega</option>}</select></label>{delivery==='delivery'&&zones.length>0&&<label>Bairro / região<select value={deliveryZoneId} onChange={e=>{setDeliveryZoneId(e.target.value);setQuote(null)}} required><option value="">Selecione...</option>{zones.map(z=><option value={z.id} key={z.id}>{z.name} · {money(z.fee)}</option>)}</select></label>}
+       <label>Recebimento<select value={delivery} onChange={e=>{setDelivery(e.target.value as 'pickup'|'delivery');setQuote(null)}}>{store.allowPickup!==false&&<option value="pickup">Retirada na loja</option>}{store.allowDelivery!==false&&<option value="delivery">Entrega</option>}</select></label>{delivery==='delivery'&&!useDefaultDeliveryFee&&zones.length>0&&<label>Bairro / região<select value={deliveryZoneId} onChange={e=>{setDeliveryZoneId(e.target.value);setQuote(null)}} required><option value="">Selecione...</option>{zones.map(z=><option value={z.id} key={z.id}>{z.name} · {money(z.fee)}</option>)}</select></label>}
        {delivery==='delivery'&&<label>Endereço de entrega<textarea required={mode!=='whatsapp'} value={customer.address} onChange={e=>setCustomer({...customer,address:e.target.value})}/></label>}<label>Observações do pedido<textarea maxLength={500} value={customer.notes} onChange={e=>setCustomer({...customer,notes:e.target.value})} placeholder="Ex.: entregar na portaria, sem embalagem para presente..."/></label>
        <div className="payment-method-picker">
          <strong>Forma de pagamento</strong>

@@ -513,12 +513,41 @@ async function calculateQuote(data: any) {
 
   let deliveryFee = 0, deliveryZoneName = '';
   if (fulfillment === 'delivery') {
-    if (store.allowDelivery === false) throw new HttpsError('failed-precondition', 'Entrega não disponível.');
-    if (deliveryZoneId) {
+    if (store.allowDelivery === false) {
+      throw new HttpsError('failed-precondition', 'Entrega não disponível.');
+    }
+
+    const deliveryFeeMode =
+      store.deliveryFeeMode === 'default' ? 'default' : 'zones';
+
+    if (deliveryFeeMode === 'default') {
+      // Taxa única: qualquer bairro enviado pelo cliente é ignorado.
+      deliveryFee = Number(store.deliveryFee || 0);
+    } else {
+      // Por bairros/regiões: uma região válida é obrigatória.
+      if (!deliveryZoneId) {
+        throw new HttpsError(
+          'invalid-argument',
+          'Selecione o bairro / região da entrega.'
+        );
+      }
+
       const z = await db.doc(`deliveryZones/${deliveryZoneId}`).get();
-      if (!z.exists || z.data()?.storeId !== storeId || z.data()?.active !== true) throw new HttpsError('invalid-argument','Área de entrega inválida.');
-      deliveryFee = Number(z.data()?.fee || 0); deliveryZoneName = String(z.data()?.name || '');
-    } else deliveryFee = Number(store.deliveryFee || 0);
+
+      if (
+        !z.exists ||
+        z.data()?.storeId !== storeId ||
+        z.data()?.active !== true
+      ) {
+        throw new HttpsError(
+          'invalid-argument',
+          'Área de entrega inválida.'
+        );
+      }
+
+      deliveryFee = Number(z.data()?.fee || 0);
+      deliveryZoneName = String(z.data()?.name || '');
+    }
   }
 
   let discount = 0, appliedCoupon = '';
@@ -536,7 +565,22 @@ async function calculateQuote(data: any) {
   }
   if(Number(store.minOrderValue||0)>0 && subtotal<Number(store.minOrderValue||0)) throw new HttpsError('failed-precondition',`Pedido mínimo de R$ ${Number(store.minOrderValue||0).toFixed(2)}.`);
   const total = Number(Math.max(0,subtotal - discount + deliveryFee).toFixed(2));
-  return {store,items,subtotal,discount,couponCode:appliedCoupon,deliveryFee,deliveryZoneId:deliveryZoneId||'',deliveryZoneName,total};
+  const appliedDeliveryZoneId =
+    fulfillment === 'delivery' && store.deliveryFeeMode !== 'default'
+      ? deliveryZoneId
+      : '';
+
+  return {
+    store,
+    items,
+    subtotal,
+    discount,
+    couponCode:appliedCoupon,
+    deliveryFee,
+    deliveryZoneId:appliedDeliveryZoneId,
+    deliveryZoneName,
+    total
+  };
 }
 
 
@@ -569,6 +613,7 @@ export const getPublicStoreBySlug = onCall({region:'us-central1'}, async request
     allowCash:store.allowCash!==false,
     allowPickup:store.allowPickup!==false,
     allowDelivery:store.allowDelivery!==false,
+    deliveryFeeMode:store.deliveryFeeMode==='default'?'default':'zones',
     deliveryFee:Number(store.deliveryFee||0),
     bannerText:String(store.bannerText||''),
     businessHours:String(store.businessHours||''),
@@ -714,7 +759,13 @@ export const createOrder = onCall({ region: 'us-central1' }, async (request) => 
     }
   }
 
-  const allowedPayments=[quote.store.allowPix!==false&&'Pix',quote.store.allowCard!==false&&'Cartão',quote.store.allowCash!==false&&'Dinheiro'].filter(Boolean);
+  const allowedPayments=[
+    quote.store.allowPix!==false&&'Pix',
+    quote.store.allowCard!==false&&'Cartão',
+    quote.store.allowCard!==false&&'Cartão de crédito',
+    quote.store.allowCard!==false&&'Cartão de débito',
+    quote.store.allowCash!==false&&'Dinheiro'
+  ].filter(Boolean);
   if (!allowedPayments.includes(paymentMethod)) throw new HttpsError('invalid-argument','Forma de pagamento indisponível.');
 
   const orderRef=db.collection('orders').doc();
@@ -1114,7 +1165,11 @@ export const updateOrderOperation = onCall({region:'us-central1'}, async request
       );
     }
 
-    if(order.paymentStatus!=='paid'){
+    const canOperateWithPendingPayment =
+      order.paymentMethod === 'Dinheiro' &&
+      order.paymentStatus === 'pending';
+
+    if(order.paymentStatus!=='paid' && !canOperateWithPendingPayment){
       throw new HttpsError(
         'failed-precondition',
         'O andamento só pode iniciar após a confirmação do pagamento.'

@@ -26,6 +26,7 @@ export function CheckoutSettingsPage() {
   });
 
   const [deliveryFee, setDeliveryFee] = useState('0');
+  const [deliveryFeeMode, setDeliveryFeeMode] = useState<'zones'|'default'>('zones');
   const [saved, setSaved] = useState(false);
   const [message, setMessage] = useState('');
 
@@ -46,6 +47,7 @@ export function CheckoutSettingsPage() {
       }));
 
       setDeliveryFee(String(data.deliveryFee ?? 0));
+      setDeliveryFeeMode(data.deliveryFeeMode === 'default' ? 'default' : 'zones');
     });
   }, [profile?.storeId]);
 
@@ -97,6 +99,7 @@ export function CheckoutSettingsPage() {
       allowCash: store.allowCash !== false,
       allowPickup: store.allowPickup !== false,
       allowDelivery: store.allowDelivery !== false,
+      deliveryFeeMode,
       deliveryFee: Number.isFinite(fee) ? fee : 0,
     });
 
@@ -297,17 +300,51 @@ export function CheckoutSettingsPage() {
               Entrega
             </label>
 
-            <label>
-              Taxa padrão de entrega
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                inputMode="decimal"
-                value={deliveryFee}
-                onChange={(e) => setDeliveryFee(e.target.value)}
-              />
-            </label>
+            {store.allowDelivery !== false && (
+              <div className="delivery-fee-mode">
+                <strong>Forma de calcular a entrega</strong>
+
+                <label>
+                  <input
+                    type="radio"
+                    name="deliveryFeeMode"
+                    checked={deliveryFeeMode === 'zones'}
+                    onChange={() => setDeliveryFeeMode('zones')}
+                  />
+                  <span>
+                    <b>Por bairros / regiões</b>
+                    <small>Usa a taxa cadastrada para cada região.</small>
+                  </span>
+                </label>
+
+                <label>
+                  <input
+                    type="radio"
+                    name="deliveryFeeMode"
+                    checked={deliveryFeeMode === 'default'}
+                    onChange={() => setDeliveryFeeMode('default')}
+                  />
+                  <span>
+                    <b>Taxa única</b>
+                    <small>Aplica o mesmo valor para todas as entregas.</small>
+                  </span>
+                </label>
+
+                {deliveryFeeMode === 'default' && (
+                  <label>
+                    Valor da entrega (R$)
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      inputMode="decimal"
+                      value={deliveryFee}
+                      onChange={(e) => setDeliveryFee(e.target.value)}
+                    />
+                  </label>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="save-row">

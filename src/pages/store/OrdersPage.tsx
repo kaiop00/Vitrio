@@ -104,7 +104,7 @@ export function OrdersPage(){
           .map(([v,l])=><option value={v} key={v}>{l}</option>)}
       </select>
     </label>
-    {o.paymentStatus==='paid'&&nextStatus(o)&&<button className="primary-btn quick-status" disabled={busyIds[o.id]} onClick={()=>update(o.id,{status:nextStatus(o)!})}>Avançar para {labels[nextStatus(o)!]} <ArrowRight size={16}/></button>}
+    {(o.paymentStatus==='paid'||(o.paymentMethod==='Dinheiro'&&o.paymentStatus==='pending'))&&nextStatus(o)&&<button className="primary-btn quick-status" disabled={busyIds[o.id]} onClick={()=>update(o.id,{status:nextStatus(o)!})}>Avançar para {labels[nextStatus(o)!]} <ArrowRight size={16}/></button>}
     {messageEnabled&&o.status!=='cancelled'&&<button className="secondary-btn" type="button" onClick={()=>sendStatusWhatsapp(o,o.paymentStatus==='paid'?o.status:'pending_payment')}><MessageCircle size={17}/>Enviar WhatsApp</button>}
     {o.status!=='cancelled'&&<button className="secondary-btn danger-action" disabled={busyIds[o.id]} onClick={()=>cancel(o.id)}><XCircle size={17}/>Cancelar pedido</button>}
    </div>
