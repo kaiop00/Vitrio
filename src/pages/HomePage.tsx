@@ -110,7 +110,8 @@ export function HomePage(){
 
       <div className="marketing-footer-bottom">
         <span>© 2026 IDEIA LTDA. Todos os direitos reservados.</span>
-        <span>Vitrio · Seu comércio em um link.</span>
+        {/* <span>Vitrio · Seu comércio em um link.</span> */}
+        <span>Fone Comercial: (88) 98849-9692</span>
       </div>
     </footer>
   </div>

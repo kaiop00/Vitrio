@@ -115,7 +115,18 @@ export const registerStore = onCall({ region:'us-central1' }, async request => {
   let user:any=null;
   try{
     user=await getAuth().createUser({email,password,displayName:ownerName});
-    const trialEnds=new Date(); trialEnds.setDate(trialEnds.getDate()+30);
+    const now = new Date();
+    const fortalezaParts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Fortaleza',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(now);
+    const year = fortalezaParts.find(part => part.type === 'year')?.value;
+    const month = fortalezaParts.find(part => part.type === 'month')?.value;
+    const day = fortalezaParts.find(part => part.type === 'day')?.value;
+    if (!year || !month || !day) throw new HttpsError('internal','Não foi possível calcular o período de teste.');
+    const trialEnds = new Date(`${year}-${month}-${day}T23:59:59-03:00`);
 
     await db.runTransaction(async tx=>{
       const freshStore=await tx.get(storeRef);

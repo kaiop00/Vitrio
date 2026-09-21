@@ -13,7 +13,7 @@ export function MerchantAccessGate({children}:{children:React.ReactNode}){
  useEffect(()=>{if(!profile?.storeId){setLoading(false);return;}return onSnapshot(doc(db,'stores',profile.storeId),s=>{setStore(s.exists()?({id:s.id,...s.data()} as any):null);setLoading(false);},()=>setLoading(false));},[profile?.storeId]);
  if(loading)return <div className="screen-center"><LoadingState rows={3} label="Verificando sua loja..."/></div>;
  if(!profile?.storeId||!store)return <AccessState title="Loja não vinculada" text="Seu usuário não está vinculado a uma loja. Fale com o suporte do Vitrio." onLogout={logout}/>;
- const now=Date.now();const trialEnd=toDate(store.trialEndsAt);const trialExpired=store.subscriptionStatus==='trial'&&trialEnd&&trialEnd.getTime()<now;const subscriptionEnd=toDate((store as any).subscriptionEndsAt);const subscriptionExpired=store.subscriptionStatus==='active'&&subscriptionEnd&&subscriptionEnd.getTime()<now;
+ const now=Date.now();const trialEnd=toDate(store.trialEndsAt);const trialExpired=store.subscriptionStatus==='trial'&&trialEnd&&trialEnd.getTime()<=now;const subscriptionEnd=toDate((store as any).subscriptionEndsAt);const subscriptionExpired=store.subscriptionStatus==='active'&&subscriptionEnd&&subscriptionEnd.getTime()<now;
  const blocked=!store.active||trialExpired||subscriptionExpired||['past_due','suspended','cancelled'].includes(store.subscriptionStatus||'');
  if(blocked){
   const trial=!!trialExpired;
