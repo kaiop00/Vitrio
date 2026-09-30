@@ -1,0 +1,16 @@
+node_modules/
+functions/node_modules/
+
+dist/
+.firebase/
+
+.env
+.env.*
+!.env.example
+
+.DS_Store
+
+*.tsbuildinfo
+
+functions/lib/
+coverage/

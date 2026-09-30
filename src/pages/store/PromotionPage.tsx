@@ -1,0 +1,48 @@
+import { useEffect, useMemo, useState } from 'react';
+import QRCode from 'qrcode';
+import { Copy, Download, ExternalLink, Instagram, Link2, MessageCircle, QrCode, Share2, Sparkles, LockKeyhole, Trash2, RefreshCw } from 'lucide-react';
+import { collection, doc, onSnapshot, orderBy, query, updateDoc } from 'firebase/firestore';
+import { db } from '../../lib/firebase';
+import { useAuth } from '../../contexts/AuthContext';
+import { Store } from '../../types/models';
+import { ShareSheet } from '../../components/ShareSheet';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from '../../lib/firebase';
+
+export function PromotionPage(){
+ const {profile}=useAuth();
+ const [store,setStore]=useState<Store|null>(null),[qr,setQr]=useState(''),[copied,setCopied]=useState(false),[shareOpen,setShareOpen]=useState(false);
+ const [accesses,setAccesses]=useState<any[]>([]),[accessHours,setAccessHours]=useState(24),[accessLoading,setAccessLoading]=useState(false),[accessMessage,setAccessMessage]=useState('');
+ useEffect(()=>{if(!profile?.storeId)return;return onSnapshot(doc(db,'stores',profile.storeId),s=>setStore(s.exists()?({id:s.id,...s.data()} as Store):null))},[profile?.storeId]);
+ useEffect(()=>{if(!profile?.storeId)return;return onSnapshot(query(collection(db,'stores',profile.storeId,'catalogAccess'),orderBy('createdAt','desc')),snap=>setAccesses(snap.docs.map(d=>({id:d.id,...d.data()}))))},[profile?.storeId]);
+ const url=useMemo(()=>store?`${window.location.origin}/loja/${store.slug}`:'',[store]);
+ const privateAccessUrl=()=>url;
+ const privateAccessShareText=(code:string)=>`Catálogo privado da ${store?.name||'loja'}\nLink: ${url}\nCódigo de acesso: ${code}`;
+ const formatDate=(value:any)=>{const ms=typeof value?.toMillis==='function'?value.toMillis():Number(value||0);return ms?new Date(ms).toLocaleString('pt-BR'):'—'};
+ async function togglePrivate(enabled:boolean){if(!profile?.storeId)return;setAccessLoading(true);try{await updateDoc(doc(db,'stores',profile.storeId),{catalogAccessEnabled:enabled});setStore(v=>v?{...v,catalogAccessEnabled:enabled}:v);setAccessMessage(enabled?'Catálogo privado ativado.':'Catálogo público reativado.')}catch(e:any){setAccessMessage(e?.message||'Não foi possível alterar o acesso do catálogo.')}finally{setAccessLoading(false)}}
+ async function createAccess(){if(!profile?.storeId)return;setAccessLoading(true);setAccessMessage('');try{const create= httpsCallable(functions,'createCatalogAccess');const result:any=await create({storeId:profile.storeId,hours:accessHours});const code=String(result.data?.code||'');if(!code)throw new Error('O servidor não retornou o código de acesso.');const shareText=privateAccessShareText(code);try{await navigator.clipboard.writeText(shareText);}catch{}setAccessMessage(`Código ${code} criado. O link e o código foram copiados.`)}catch(e:any){setAccessMessage(e?.message?.replace('FirebaseError: ','')||'Não foi possível criar o acesso. Verifique suas permissões.')}finally{setAccessLoading(false)}}
+ async function deleteAccess(id:string){if(!profile?.storeId||!window.confirm('Excluir este acesso? O código deixará de funcionar imediatamente.'))return;setAccessLoading(true);try{const remove=httpsCallable(functions,'deleteCatalogAccess');await remove({storeId:profile.storeId,accessId:id});setAccessMessage('Acesso excluído com sucesso.')}catch(e:any){setAccessMessage(e?.message?.replace('FirebaseError: ','')||'Não foi possível excluir o acesso.')}finally{setAccessLoading(false)}}
+ const sharePayload=store&&shareOpen?{title:store.name,text:`Conheça a vitrine da ${store.name}`,url}:null;
+ useEffect(()=>{if(!url)return;QRCode.toDataURL(url,{width:900,margin:2,errorCorrectionLevel:'H'}).then(setQr).catch(()=>setQr(''))},[url]);
+ async function copy(){if(!url)return;await navigator.clipboard.writeText(url);setCopied(true);setTimeout(()=>setCopied(false),1600)}
+ function download(){if(!qr||!store)return;const a=document.createElement('a');a.href=qr;a.download=`qrcode-${store.slug}.png`;a.click()}
+ if(!store)return <div className="card">Carregando dados da loja...</div>;
+ return <>
+  <div className="page-head promotion-head"><div><span className="promotion-kicker">DIVULGAÇÃO</span><h1>Leve sua loja para onde seus clientes estão</h1><p>Compartilhe a vitrine por aplicativos, copie o link ou use o QR Code em materiais físicos.</p></div><a className="secondary-btn" href={`/loja/${store.slug}`} target="_blank" rel="noreferrer"><ExternalLink size={17}/>Abrir vitrine</a></div>
+  <section className="promotion-hero-card">
+   <div className="promotion-hero-copy"><span className="promotion-icon"><Sparkles size={21}/></span><div><small>LINK PRINCIPAL DA LOJA</small><h2>{store.name}</h2><p>Um único endereço para catálogo, produtos, carrinho e checkout.</p></div></div>
+   <div className="promotion-link-row"><div className="share-link-box"><Link2 size={17}/><span>{url}</span><button onClick={copy}><Copy size={17}/>{copied?'Copiado':'Copiar'}</button></div><button className="primary-btn promotion-share-main" onClick={()=>setShareOpen(true)}><Share2 size={18}/>Compartilhar</button></div>
+   <div className="promotion-social-row"><button onClick={()=>setShareOpen(true)}><MessageCircle size={18}/><span><strong>WhatsApp</strong><small>Abrir o app</small></span></button><button onClick={()=>setShareOpen(true)}><Instagram size={18}/><span><strong>Instagram</strong><small>Copiar e abrir o app</small></span></button><button onClick={()=>setShareOpen(true)}><Share2 size={18}/><span><strong>Outros apps</strong><small>Usar menu do dispositivo</small></span></button></div>
+  </section>
+  <div className="promotion-grid v28">
+   <section className="promotion-panel promotion-qr-panel"><div className="promotion-panel-head"><div className="promotion-icon"><QrCode size={21}/></div><div><h2>QR Code da vitrine</h2><p>Ideal para balcão, embalagem, cartão, fachada e material promocional.</p></div></div><div className="promotion-qr-stage">{qr?<img className="store-qr" src={qr} alt={`QR Code da ${store.name}`}/>:<div className="qr-loading">Gerando QR Code...</div>}<div className="qr-copy"><strong>Escaneie e acesse</strong><span>O QR Code aponta sempre para a vitrine pública desta loja.</span></div></div><button className="secondary-btn full" onClick={download} disabled={!qr}><Download size={17}/>Baixar QR Code em PNG</button></section>
+   <section className="promotion-panel promotion-tips-v28"><div className="promotion-panel-head"><div className="promotion-icon"><Share2 size={21}/></div><div><h2>Onde divulgar</h2><p>Atalhos simples para manter o link da loja presente nos canais mais usados.</p></div></div><div className="tips-grid-v28"><div><span>01</span><strong>Bio do Instagram</strong><small>Use a vitrine como link principal do perfil.</small></div><div><span>02</span><strong>WhatsApp</strong><small>Envie o catálogo completo em vez de várias fotos.</small></div><div><span>03</span><strong>Loja física</strong><small>Coloque o QR Code no balcão, sacolas e etiquetas.</small></div><div><span>04</span><strong>Pós-venda</strong><small>Inclua o link na mensagem de agradecimento.</small></div></div></section>
+  </div>
+  <section className="promotion-panel catalog-access-panel">
+   <div className="promotion-panel-head"><div className="promotion-icon"><LockKeyhole size={21}/></div><div><h2>Acesso privado ao catálogo</h2><p>Compartilhe seu catálogo com outro lojista usando um código temporário. Você decide quando ativar e pode excluir qualquer acesso.</p></div></div>
+   <div className="catalog-access-toggle"><div><strong>{store.catalogAccessEnabled?'Catálogo privado ativado':'Catálogo público'}</strong><small>{store.catalogAccessEnabled?'Quem não tiver um código válido não verá os produtos.':'Qualquer pessoa com o link consegue acessar a vitrine normalmente.'}</small></div><button className={store.catalogAccessEnabled?'toggle-btn active':'toggle-btn'} disabled={accessLoading} onClick={()=>togglePrivate(!store.catalogAccessEnabled)}>{store.catalogAccessEnabled?'Ativado':'Desativado'}</button></div>
+   {store.catalogAccessEnabled&&<><div className="catalog-access-create"><label>Validade do novo acesso<select value={accessHours} onChange={e=>setAccessHours(Number(e.target.value))}><option value={1}>1 hora</option><option value={24}>24 horas</option><option value={168}>7 dias</option><option value={720}>30 dias</option></select></label><button className="primary-btn" disabled={accessLoading} onClick={createAccess}><RefreshCw size={17}/>Gerar acesso</button></div>{accessMessage&&<div className="catalog-access-message">{accessMessage}</div>}<div className="catalog-access-list">{accesses.length===0?<div className="catalog-access-empty">Nenhum acesso criado ainda.</div>:accesses.map(a=>{const expires=typeof a.expiresAt?.toMillis==='function'?a.expiresAt.toMillis():Number(a.expiresAt||0);const expired=expires<=Date.now();return <div className="catalog-access-item" key={a.id}><div><strong>{a.code}</strong><small>Expira em {formatDate(a.expiresAt)} {expired?'· Expirado':''}</small><span>{privateAccessUrl()}</span><small className="catalog-access-copy-hint">Ao abrir o link, o visitante deverá informar o código.</small></div><div className="catalog-access-actions"><button className="secondary-btn" onClick={async()=>{await navigator.clipboard.writeText(privateAccessShareText(a.code));setAccessMessage('Link + código copiados.')}} disabled={expired}><Copy size={16}/>Copiar link + código</button><button className="danger-btn" onClick={()=>deleteAccess(a.id)} disabled={accessLoading}><Trash2 size={16}/>Excluir</button></div></div>})}</div></>}
+  </section>
+  <ShareSheet payload={sharePayload} onClose={()=>setShareOpen(false)}/>
+ </>;
+}
