@@ -14,6 +14,11 @@ function timestampMillis(value:any){
   if(!value) return 0;
   if(typeof value?.toMillis==='function') return Number(value.toMillis()||0);
   if(typeof value?.toDate==='function') return Number(value.toDate()?.getTime?.()||0);
+  const seconds=typeof value?.seconds==='number'?value.seconds:typeof value?._seconds==='number'?value._seconds:NaN;
+  if(Number.isFinite(seconds)){
+    const nanos=typeof value?.nanoseconds==='number'?value.nanoseconds:typeof value?._nanoseconds==='number'?value._nanoseconds:0;
+    return seconds*1000+Math.floor(nanos/1e6);
+  }
   const parsed=new Date(value).getTime();
   return Number.isFinite(parsed)?parsed:0;
 }
@@ -454,6 +459,38 @@ export const deleteStoreUser = onCall({ region:'us-central1' }, async request =>
 
 type CheckoutItem = { productId: string; quantity: number; variantId?: string; addonOptionIds?: string[] };
 
+function flashOfferIsActive(product:any, now=Date.now()) {
+  if(product?.flashOffer!==true) return false;
+  const starts=timestampMillis(product.flashOfferStartsAt);
+  const ends=timestampMillis(product.flashOfferEndsAt);
+  return (!starts || starts<=now) && (!ends || ends>now);
+}
+
+function effectiveProductPrice(product:any, now=Date.now()) {
+  const current=Number(product?.price||0);
+  if(flashOfferIsActive(product,now)) return current;
+  const normal=Number(product?.compareAtPrice||0);
+  return normal>current ? normal : current;
+}
+
+function publicProductPayload(doc:any) {
+  const product={id:doc.id,...doc.data()};
+  if(product.flashOffer===true) {
+    const ends=timestampMillis(product.flashOfferEndsAt);
+    if(ends && ends<=Date.now()) {
+      const normal=Number(product.compareAtPrice||0);
+      const current=Number(product.price||0);
+      return {
+        ...product,
+        flashOffer:false,
+        price:normal>current?normal:current,
+        compareAtPrice:null
+      };
+    }
+  }
+  return product;
+}
+
 function normalizeItems(rawItems: CheckoutItem[]) {
   const normalized = new Map<string, {productId:string; variantId:string; addonOptionIds:string[]; quantity:number}>();
   for (const item of rawItems) {
@@ -516,7 +553,7 @@ async function calculateQuote(data: any) {
     const validIds=new Set(addons.map(a=>a.optionId));
     if([...requested].some(id=>!validIds.has(id))) throw new HttpsError('failed-precondition','Um opcional selecionado não está mais disponível.');
     const addonPrice=addons.reduce((sum,a)=>sum+Number(a.price||0),0);
-    const price = Number(p.price || 0)+Number(variant?.priceAdjustment||0)+addonPrice;
+    const price = effectiveProductPrice(p)+Number(variant?.priceAdjustment||0)+addonPrice;
     const lineTotal = Number((price * quantity).toFixed(2)); subtotal += lineTotal;
     return { productId:snap.id,name:String(p.name||'Produto'),price,quantity,subtotal:lineTotal,variantId:variant?String(variant.id):'',variantName:variant?String(variant.name):'',variantSku:variant?String(variant.sku||''):'',addons };
   });
@@ -693,7 +730,7 @@ export const getPublicCatalogBySlug = onCall({region:'us-central1'}, async reque
   return {
     requiresAccess:false,
     store:publicStorePayload(doc,store,slug),
-    products:productsSnap.docs.map(d=>({id:d.id,...d.data()})),
+    products:productsSnap.docs.map(publicProductPayload),
     categories:categoriesSnap.docs.map(d=>({id:d.id,...d.data()})),
     zones:zonesSnap.docs.map(d=>({id:d.id,...d.data()}))
   };
