@@ -53,6 +53,20 @@ const money = (v: number) =>
     currency: 'BRL'
   });
 
+// Aceita valores digitados no padrão brasileiro ou sem separador de milhar.
+const parseMoney = (value: unknown): number => {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  let raw = String(value ?? '').trim().replace(/\s|R\$/gi, '');
+  if (!raw) return 0;
+  if (raw.includes(',')) {
+    raw = raw.replace(/\./g, '').replace(',', '.');
+  } else if (/^-?\d{1,3}(?:\.\d{3})+$/.test(raw)) {
+    raw = raw.replace(/\./g, '');
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+};
+
 const blank = {
   name: '',
   sku: '',
@@ -220,8 +234,8 @@ export function ProductsPage() {
 
       const variants: any[] = parseVariants(
         form.variantsText,
-        Number(form.price || 0),
-        Number(form.purchasePrice || 0)
+        parseMoney(form.price),
+        parseMoney(form.purchasePrice)
       ) as any[];
 
       const addonGroups = parseAddons(form.addonsText);
@@ -240,11 +254,11 @@ export function ProductsPage() {
         sku: form.sku.trim(),
         description: form.description.trim(),
 
-        price: Number(form.price) || 0,
-        purchasePrice: Number(form.purchasePrice) || 0,
+        price: parseMoney(form.price),
+        purchasePrice: parseMoney(form.purchasePrice),
 
         compareAtPrice: form.compareAtPrice
-          ? Number(form.compareAtPrice)
+          ? parseMoney(form.compareAtPrice)
           : null,
 
         stock: effectiveStock,
@@ -462,8 +476,8 @@ export function ProductsPage() {
     try {
     const variants = parseVariants(
       editVariantsText,
-      Number(editing.price || 0),
-      Number(editing.purchasePrice || 0)
+      parseMoney(editing.price),
+      parseMoney(editing.purchasePrice)
     ) as any[];
 
     const addonGroups = parseAddons(editAddonsText);
@@ -489,13 +503,13 @@ export function ProductsPage() {
       sku: editing.sku || '',
       description: editing.description || '',
 
-      price: Number(editing.price) || 0,
+      price: parseMoney(editing.price),
 
       purchasePrice:
-        Number(editing.purchasePrice || 0) || 0,
+        parseMoney(editing.purchasePrice),
 
       compareAtPrice: editing.compareAtPrice
-        ? Number(editing.compareAtPrice)
+        ? parseMoney(editing.compareAtPrice)
         : null,
 
       stock: effectiveStock,
@@ -998,11 +1012,7 @@ export function ProductsPage() {
           id: `option-${key}-${optionKey}`,
           name: optionName,
           price:
-            Number(
-              String(
-                priceRaw || '0'
-              ).replace(',', '.')
-            ) || 0,
+            parseMoney(priceRaw),
           active: true
         });
       });
@@ -1039,7 +1049,7 @@ export function ProductsPage() {
       .map(v => {
         const finalPrice = Math.max(
           0,
-          Number(basePrice || 0) +
+          parseMoney(basePrice) +
             Number(v.priceAdjustment || 0)
         );
 
@@ -1082,34 +1092,24 @@ export function ProductsPage() {
         const parsedFinal =
           finalPriceRaw === undefined ||
           finalPriceRaw === ''
-            ? Number(basePrice || 0)
-            : Number(
-                String(
-                  finalPriceRaw ||
-                    basePrice ||
-                    0
-                ).replace(',', '.')
-              );
+            ? parseMoney(basePrice)
+            : parseMoney(finalPriceRaw);
 
         const finalPrice =
           Number.isFinite(parsedFinal)
             ? Math.max(0, parsedFinal)
-            : Number(basePrice || 0);
+            : parseMoney(basePrice);
 
         const parsedPurchase =
           purchasePriceRaw === undefined ||
           purchasePriceRaw === ''
-            ? Number(basePurchasePrice || 0)
-            : Number(
-                String(
-                  purchasePriceRaw || 0
-                ).replace(',', '.')
-              );
+            ? parseMoney(basePurchasePrice)
+            : parseMoney(purchasePriceRaw);
 
         const purchasePrice =
           Number.isFinite(parsedPurchase)
             ? Math.max(0, parsedPurchase)
-            : Number(basePurchasePrice || 0);
+            : parseMoney(basePurchasePrice);
 
         return {
           id: `variant-${stableKey(
@@ -1127,7 +1127,7 @@ export function ProductsPage() {
 
           priceAdjustment:
             finalPrice -
-            Number(basePrice || 0),
+            parseMoney(basePrice),
 
           purchasePrice,
 
@@ -1392,9 +1392,8 @@ export function ProductsPage() {
             Preço de venda
 
             <input
-              type="number"
-              min="0"
-              step="0.01"
+              type="text"
+              inputMode="decimal"
               value={form.price}
               onChange={e =>
                 setForm({
@@ -1416,9 +1415,8 @@ export function ProductsPage() {
             Valor de compra
 
             <input
-              type="number"
-              min="0"
-              step="0.01"
+              type="text"
+              inputMode="decimal"
               value={form.purchasePrice}
               onChange={e =>
                 setForm({
@@ -1442,9 +1440,8 @@ export function ProductsPage() {
             Preço anterior
 
             <input
-              type="number"
-              min="0"
-              step="0.01"
+              type="text"
+              inputMode="decimal"
               value={form.compareAtPrice}
               onChange={e =>
                 setForm({
@@ -2257,22 +2254,16 @@ export function ProductsPage() {
                 Preço de venda
 
                 <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={
-                    editing.price ?? ''
-                  }
+                  type="text"
+                  inputMode="decimal"
+                  value={editing.price ?? ''}
                   onFocus={e =>
                     e.currentTarget.select()
                   }
                   onChange={e =>
                     setEditing({
                       ...editing,
-                      price:
-                        Number(
-                          e.target.value
-                        ) || 0
+                      price: e.target.value as any
                     })
                   }
                 />
@@ -2288,15 +2279,9 @@ export function ProductsPage() {
                 Valor de compra
 
                 <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={
-                    editing.purchasePrice &&
-                    Number(editing.purchasePrice) > 0
-                      ? editing.purchasePrice
-                      : ''
-                  }
+                  type="text"
+                  inputMode="decimal"
+                  value={editing.purchasePrice ? String(editing.purchasePrice) : ''}
                   placeholder="Ex.: 30,00"
                   onFocus={e =>
                     e.currentTarget.select()
@@ -2304,10 +2289,7 @@ export function ProductsPage() {
                   onChange={e =>
                     setEditing({
                       ...editing,
-                      purchasePrice:
-                        e.target.value === ''
-                          ? undefined
-                          : Number(e.target.value)
+                      purchasePrice: e.target.value === '' ? undefined : e.target.value as any
                     })
                   }
                 />
@@ -2324,22 +2306,13 @@ export function ProductsPage() {
                 Preço anterior
 
                 <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={
-                    editing.compareAtPrice ||
-                    ''
-                  }
+                  type="text"
+                  inputMode="decimal"
+                  value={editing.compareAtPrice ? String(editing.compareAtPrice) : ''}
                   onChange={e =>
                     setEditing({
                       ...editing,
-                      compareAtPrice:
-                        e.target.value
-                          ? Number(
-                              e.target.value
-                            )
-                          : undefined
+                      compareAtPrice: e.target.value ? e.target.value as any : undefined
                     })
                   }
                 />
@@ -2576,13 +2549,9 @@ export function ProductsPage() {
                               </span>
 
                               <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                value={variant.price.replace(
-                                  ',',
-                                  '.'
-                                )}
+                                type="text"
+                                inputMode="decimal"
+                                value={variant.price}
                                 onFocus={e =>
                                   e.currentTarget.select()
                                 }
@@ -2609,22 +2578,9 @@ export function ProductsPage() {
                               </span>
 
                               <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                value={
-                                  Number(
-                                    variant.purchasePrice.replace(
-                                      ',',
-                                      '.'
-                                    )
-                                  ) > 0
-                                    ? variant.purchasePrice.replace(
-                                        ',',
-                                        '.'
-                                      )
-                                    : ''
-                                }
+                                type="text"
+                                inputMode="decimal"
+                                value={variant.purchasePrice}
                                 placeholder="Ex.: 25,00"
                                 onFocus={e =>
                                   e.currentTarget.select()
@@ -2715,15 +2671,7 @@ export function ProductsPage() {
                               (Number(
                                 v.stock
                               ) || 0) *
-                                (Number(
-                                  String(
-                                    v.purchasePrice ||
-                                      '0'
-                                  ).replace(
-                                    ',',
-                                    '.'
-                                  )
-                                ) || 0),
+                                (parseMoney(v.purchasePrice)),
                             0
                           )
                         )}
