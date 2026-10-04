@@ -526,6 +526,9 @@ export function ProductsPage() {
       active: editing.active,
       featured: !!editing.featured,
       flashOffer: !!editing.flashOffer,
+      flashOfferPrice: Number((editing as any).flashOfferPrice || 0) || null,
+      flashOfferStartsAt: (editing as any).flashOfferStartsAt || null,
+      flashOfferEndsAt: (editing as any).flashOfferEndsAt || null,
 
       availableForPickup:
         editing.availableForPickup !== false,
@@ -2029,6 +2032,42 @@ export function ProductsPage() {
                   }
                 >
                   <Pencil size={17} />
+                </button>
+
+                <button
+                  className="icon-btn"
+                  title={p.flashOffer ? 'Configurar oferta relâmpago' : 'Criar oferta relâmpago'}
+                  onClick={async () => {
+                    const active = !!p.flashOffer;
+                    const enteredPrice = window.prompt(`Preço promocional para ${p.name}. Preço de venda atual: ${money(Number(p.price || 0))}`, active ? String(p.flashOfferPrice ?? '') : '');
+                    if (enteredPrice === null) return;
+                    const raw = enteredPrice.trim().replace(/\./g, '').replace(',', '.');
+                    const promotional = Number(raw);
+                    if (!Number.isFinite(promotional) || promotional <= 0 || promotional >= Number(p.price || 0)) {
+                      toast('Informe um preço promocional maior que zero e menor que o preço de venda.');
+                      return;
+                    }
+                    const startInput = window.prompt('Início da oferta (AAAA-MM-DDTHH:mm). Deixe vazio para iniciar agora.', '');
+                    if (startInput === null) return;
+                    const endInput = window.prompt('Fim da oferta (AAAA-MM-DDTHH:mm), obrigatório.', '');
+                    if (endInput === null || !endInput.trim()) return;
+                    const starts = startInput.trim() ? new Date(startInput) : new Date();
+                    const ends = new Date(endInput);
+                    if (!Number.isFinite(starts.getTime()) || !Number.isFinite(ends.getTime()) || ends <= starts) {
+                      toast('Confira as datas: o encerramento precisa ser posterior ao início.');
+                      return;
+                    }
+                    await updateDoc(doc(db, 'products', p.id), {
+                      flashOffer: true,
+                      flashOfferPrice: promotional,
+                      flashOfferStartsAt: Timestamp.fromDate(starts),
+                      flashOfferEndsAt: Timestamp.fromDate(ends),
+                      updatedAt: serverTimestamp()
+                    });
+                    toast('Oferta relâmpago configurada. O preço de venda original foi preservado.');
+                  }}
+                >
+                  <BadgePercent size={17} />
                 </button>
 
                 <button

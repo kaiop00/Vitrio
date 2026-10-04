@@ -159,6 +159,7 @@ export interface Product {
   featured?:boolean;
   sortOrder?:number;
   flashOffer?:boolean;
+  flashOfferPrice?:number;
   flashOfferStartsAt?:any;
   flashOfferEndsAt?:any;
   availableForPickup?:boolean;

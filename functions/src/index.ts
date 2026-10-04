@@ -468,27 +468,17 @@ function flashOfferIsActive(product:any, now=Date.now()) {
 
 function effectiveProductPrice(product:any, now=Date.now()) {
   const current=Number(product?.price||0);
-  if(flashOfferIsActive(product,now)) return current;
-  const normal=Number(product?.compareAtPrice||0);
-  return normal>current ? normal : current;
+  if(flashOfferIsActive(product,now)) {
+    const promotional=Number(product?.flashOfferPrice||0);
+    if(promotional>0 && promotional<current) return promotional;
+  }
+  return current;
 }
 
 function publicProductPayload(doc:any) {
-  const product={id:doc.id,...doc.data()};
-  if(product.flashOffer===true) {
-    const ends=timestampMillis(product.flashOfferEndsAt);
-    if(ends && ends<=Date.now()) {
-      const normal=Number(product.compareAtPrice||0);
-      const current=Number(product.price||0);
-      return {
-        ...product,
-        flashOffer:false,
-        price:normal>current?normal:current,
-        compareAtPrice:null
-      };
-    }
-  }
-  return product;
+  // Nunca sobrescreve o preço de venda nem usa compareAtPrice como preço de restauração.
+  // A oferta é apenas uma camada temporária aplicada pelo cálculo de preço.
+  return {id:doc.id,...doc.data()};
 }
 
 function normalizeItems(rawItems: CheckoutItem[]) {
