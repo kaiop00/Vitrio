@@ -2122,6 +2122,7 @@ export function ProductsPage() {
                 <button
                   className="icon-btn"
                   title={p.flashOffer ? 'Configurar oferta relâmpago' : 'Criar oferta relâmpago'}
+
                   onClick={() => {
                     const asDate = (value: any) => {
                       const d = timestampToDate(value);
@@ -2137,6 +2138,7 @@ export function ProductsPage() {
                     setFlashStartTime(start.time || (() => { const d=new Date(); return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; })());
                     setFlashEndDate(end.date || formatDateBR(new Date()));
                     setFlashEndTime(end.time || '23:59');
+
                   }}
                 >
                   <BadgePercent size={17} />
