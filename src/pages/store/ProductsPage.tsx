@@ -67,6 +67,49 @@ const parseMoney = (value: unknown): number => {
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
 };
 
+const formatDateBR = (date: Date) =>
+  `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`;
+
+const parseDateBR = (value: string, time: string): Date | null => {
+  const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(value.trim());
+  const clock = /^(\d{2}):(\d{2})$/.exec(time.trim());
+  if (!match || !clock) return null;
+  const day = Number(match[1]), month = Number(match[2]), year = Number(match[3]);
+  const hour = Number(clock[1]), minute = Number(clock[2]);
+  if (year < 2000 || year > 2100 || month < 1 || month > 12 || day < 1 || hour > 23 || minute > 59) return null;
+  const date = new Date(year, month - 1, day, hour, minute, 0, 0);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
+  return date;
+};
+
+const parseLocalDateTime = (value: string): Date | null => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const [, ys, mos, ds, hs, mins] = match;
+  const year = Number(ys), month = Number(mos), day = Number(ds), hour = Number(hs), minute = Number(mins);
+  if (year < 2000 || year > 2100 || month < 1 || month > 12 || day < 1 || hour > 23 || minute > 59) return null;
+  const date = new Date(year, month - 1, day, hour, minute, 0, 0);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day || date.getHours() !== hour || date.getMinutes() !== minute) return null;
+  return date;
+};
+
+const maskDateBR = (value: string) => {
+  const digits = value.replace(/\D/g, '').slice(0, 8);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+};
+
+const timestampToDate = (value: any): Date | null => {
+  if (!value) return null;
+  const date = typeof value?.toDate === 'function' ? value.toDate()
+    : typeof value?.seconds === 'number' ? new Date(value.seconds * 1000 + Math.floor(Number(value.nanoseconds || 0) / 1e6))
+    : value instanceof Date ? value
+    : typeof value === 'number' ? new Date(value)
+    : typeof value === 'string' ? new Date(value) : null;
+  return date instanceof Date && Number.isFinite(date.getTime()) ? date : null;
+};
+
 const blank = {
   name: '',
   sku: '',
@@ -79,6 +122,7 @@ const blank = {
   tags: '',
   featured: false,
   flashOffer: false,
+  flashOfferPrice: '',
   flashStart: '',
   flashEnd: '',
   availableForPickup: true,
@@ -107,12 +151,27 @@ export function ProductsPage() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
+  const [flashProduct, setFlashProduct] = useState<Product | null>(null);
+  const [flashPriceInput, setFlashPriceInput] = useState('');
+  const [flashStartDate, setFlashStartDate] = useState('');
+  const [flashStartTime, setFlashStartTime] = useState('');
+  const [flashEndDate, setFlashEndDate] = useState('');
+  const [flashEndTime, setFlashEndTime] = useState('');
+  const [flashSaving, setFlashSaving] = useState(false);
+  const [clockNow, setClockNow] = useState(() => Date.now());
+  const expiryCleanupInFlight = useRef(new Set<string>());
+  const expiryCleanupAttempted = useRef(new Set<string>());
 
   const csvRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
   const editImageInputRef = useRef<HTMLInputElement>(null);
   const editVideoInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!profile?.storeId) return;
@@ -152,6 +211,26 @@ export function ProductsPage() {
       b();
     };
   }, [profile?.storeId]);
+
+  useEffect(() => {
+    products.forEach(p => {
+      if (!p.flashOffer || expiryCleanupInFlight.current.has(p.id) || expiryCleanupAttempted.current.has(p.id)) return;
+      const endDate = timestampToDate(p.flashOfferEndsAt);
+      const endMs = endDate?.getTime() || 0;
+      // Dados sem encerramento válido não podem deixar selo/cronômetro preso em 00:00.
+      if (endMs && endMs > Date.now()) return;
+      expiryCleanupInFlight.current.add(p.id);
+      expiryCleanupAttempted.current.add(p.id);
+      updateDoc(doc(db, 'products', p.id), {
+        flashOffer: false,
+        flashOfferPrice: null,
+        flashOfferStartsAt: null,
+        flashOfferEndsAt: null,
+        updatedAt: serverTimestamp()
+      }).catch(error => console.error('[Vitrio] Falha ao limpar oferta expirada:', error))
+        .finally(() => expiryCleanupInFlight.current.delete(p.id));
+    });
+  }, [products, clockNow]);
 
   const cats = useMemo(
     () => new Map(categories.map(c => [c.id, c.name])),
@@ -229,6 +308,14 @@ export function ProductsPage() {
     setBusy(true);
     setMsg('Preparando cadastro...');
     try {
+      const normalPrice = parseMoney(form.price);
+      const flashPrice = parseMoney(form.flashOfferPrice);
+      const flashStarts = form.flashOffer ? parseLocalDateTime(form.flashStart) : null;
+      const flashEnds = form.flashOffer ? parseLocalDateTime(form.flashEnd) : null;
+      if (form.flashOffer) {
+        if (!(flashPrice > 0 && flashPrice < normalPrice)) throw new Error('O preço promocional precisa ser maior que zero e menor que o preço de venda.');
+        if (!flashStarts || !flashEnds || flashEnds <= flashStarts || flashStarts.getTime() <= Date.now() || flashEnds.getTime() <= Date.now()) throw new Error('Informe início e encerramento válidos no futuro. O encerramento deve ser posterior ao início.');
+      }
       const imageUrls = await uploadImages(files);
       const videoUrl = await uploadVideo(videoFile);
 
@@ -254,7 +341,7 @@ export function ProductsPage() {
         sku: form.sku.trim(),
         description: form.description.trim(),
 
-        price: parseMoney(form.price),
+        price: normalPrice,
         purchasePrice: parseMoney(form.purchasePrice),
 
         compareAtPrice: form.compareAtPrice
@@ -278,16 +365,9 @@ export function ProductsPage() {
         active: true,
         featured: form.featured,
         flashOffer: form.flashOffer,
-
-        flashOfferStartsAt:
-          form.flashOffer && form.flashStart
-            ? Timestamp.fromDate(new Date(form.flashStart))
-            : null,
-
-        flashOfferEndsAt:
-          form.flashOffer && form.flashEnd
-            ? Timestamp.fromDate(new Date(form.flashEnd))
-            : null,
+        flashOfferPrice: form.flashOffer ? flashPrice : null,
+        flashOfferStartsAt: flashStarts ? Timestamp.fromDate(flashStarts) : null,
+        flashOfferEndsAt: flashEnds ? Timestamp.fromDate(flashEnds) : null,
 
         availableForPickup: form.availableForPickup,
         availableForDelivery: form.availableForDelivery,
@@ -526,6 +606,9 @@ export function ProductsPage() {
       active: editing.active,
       featured: !!editing.featured,
       flashOffer: !!editing.flashOffer,
+      flashOfferPrice: Number((editing as any).flashOfferPrice || 0) || null,
+      flashOfferStartsAt: (editing as any).flashOfferStartsAt || null,
+      flashOfferEndsAt: (editing as any).flashOfferEndsAt || null,
 
       availableForPickup:
         editing.availableForPickup !== false,
@@ -1139,22 +1222,13 @@ export function ProductsPage() {
   const offerStatus = (p: Product) => {
     if (!p.flashOffer) return '';
 
-    const now = Date.now();
+    const now = clockNow;
 
-    const st =
-      p.flashOfferStartsAt
-        ?.toDate?.()
-        ?.getTime?.() || 0;
+    const st = timestampToDate(p.flashOfferStartsAt)?.getTime() || 0;
+    const en = timestampToDate(p.flashOfferEndsAt)?.getTime() || 0;
 
-    const en =
-      p.flashOfferEndsAt
-        ?.toDate?.()
-        ?.getTime?.() || 0;
-
-    if (st && st > now) return 'Agendada';
-
-    if (en && en < now) return 'Encerrada';
-
+    if (!st || !en || en <= now) return '';
+    if (st > now) return 'Agendada';
     return 'Ativa';
   };
 
@@ -1662,10 +1736,23 @@ export function ProductsPage() {
           {form.flashOffer && (
             <div className="span-2 flash-dates">
               <label>
+                Preço promocional (R$)
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="Ex.: 40,00"
+                  value={form.flashOfferPrice}
+                  onChange={e => setForm({ ...form, flashOfferPrice: e.target.value.replace(/[^0-9.,]/g, '').slice(0, 14) })}
+                  required
+                />
+                <small>O preço promocional deve ser menor que o preço de venda.</small>
+              </label>
+              <label>
                 Início da oferta
 
                 <input
                   type="datetime-local"
+                  required
                   value={form.flashStart}
                   onChange={e =>
                     setForm({
@@ -1682,6 +1769,7 @@ export function ProductsPage() {
 
                 <input
                   type="datetime-local"
+                  required
                   value={form.flashEnd}
                   onChange={e =>
                     setForm({
@@ -1886,7 +1974,7 @@ export function ProductsPage() {
                   </span>
                 )}
 
-                {p.flashOffer && (
+                {p.flashOffer && offerStatus(p) && (
                   <span className="offer-chip">
                     {offerStatus(p)}
                   </span>
@@ -2029,6 +2117,29 @@ export function ProductsPage() {
                   }
                 >
                   <Pencil size={17} />
+                </button>
+
+                <button
+                  className="icon-btn"
+                  title={p.flashOffer ? 'Configurar oferta relâmpago' : 'Criar oferta relâmpago'}
+                  onClick={() => {
+                    const asDate = (value: any) => {
+                      const d = timestampToDate(value);
+                      if (!d) return { date: '', time: '' };
+                      const pad = (n: number) => String(n).padStart(2, '0');
+                      return { date: formatDateBR(d), time: `${pad(d.getHours())}:${pad(d.getMinutes())}` };
+                    };
+                    const start = asDate(p.flashOfferStartsAt);
+                    const end = asDate(p.flashOfferEndsAt);
+                    setFlashProduct(p);
+                    setFlashPriceInput(p.flashOfferPrice ? String(p.flashOfferPrice).replace('.', ',') : '');
+                    setFlashStartDate(start.date || formatDateBR(new Date()));
+                    setFlashStartTime(start.time || (() => { const d=new Date(); return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; })());
+                    setFlashEndDate(end.date || formatDateBR(new Date()));
+                    setFlashEndTime(end.time || '23:59');
+                  }}
+                >
+                  <BadgePercent size={17} />
                 </button>
 
                 <button
@@ -2772,9 +2883,71 @@ export function ProductsPage() {
           </div>
         </div>
       )}
+
+      {flashProduct && (
+        <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget && !flashSaving) setFlashProduct(null); }}>
+          <form className="form-card flash-config-modal" onSubmit={async e => {
+            e.preventDefault();
+            if (!flashProduct || flashSaving) return;
+            const promotional = parseMoney(flashPriceInput);
+            const starts = parseDateBR(flashStartDate, flashStartTime);
+            const ends = parseDateBR(flashEndDate, flashEndTime);
+            if (!promotional || promotional >= Number(flashProduct.price || 0)) {
+              toast('O preço promocional precisa ser maior que zero e menor que o preço de venda.', 'error');
+              return;
+            }
+            if (!starts || !ends || ends <= starts || ends.getTime() <= Date.now()) {
+              toast('Confira as datas no formato DD/MM/AAAA e os horários. O encerramento precisa ser posterior ao início e estar no futuro.', 'error');
+              return;
+            }
+            if (!profile?.storeId || flashProduct.storeId !== profile.storeId) {
+              toast('Não foi possível confirmar a loja deste produto. Atualize a página e tente novamente.', 'error');
+              return;
+            }
+            setFlashSaving(true);
+            try {
+              await updateDoc(doc(db, 'products', flashProduct.id), {
+                flashOffer: true,
+                flashOfferPrice: promotional,
+                flashOfferStartsAt: Timestamp.fromDate(starts),
+                flashOfferEndsAt: Timestamp.fromDate(ends),
+                updatedAt: serverTimestamp()
+              });
+              toast('Oferta relâmpago salva com sucesso!');
+              setFlashProduct(null);
+            } catch (error: any) {
+              console.error('[Vitrio] Falha ao salvar oferta relâmpago:', error);
+              const message = String(error?.message || 'Não foi possível salvar a oferta. Verifique sua conexão e suas permissões.').replace('FirebaseError: ', '');
+              toast(message, 'error');
+            } finally {
+              setFlashSaving(false);
+            }
+          }}>
+            <div className="form-head">
+              <div><h2>Oferta relâmpago</h2><p>{flashProduct.name}</p></div>
+              <button type="button" className="icon-btn" disabled={flashSaving} onClick={() => setFlashProduct(null)} aria-label="Fechar"><X size={18}/></button>
+            </div>
+            <div className="flash-price-reference">
+              <span>Preço de venda normal</span><strong>{money(Number(flashProduct.price || 0))}</strong>
+              <small>Esse valor será restaurado automaticamente quando a oferta terminar.</small>
+            </div>
+            <label>Preço promocional (R$)
+              <input required inputMode="decimal" placeholder="Ex.: 40,00" value={flashPriceInput} onChange={e => setFlashPriceInput(e.target.value.replace(/[^0-9.,]/g, '').slice(0, 14))}/>
+            </label>
+            <div className="flash-date-grid">
+              <label>Data de início<input required type="text" inputMode="numeric" autoComplete="off" maxLength={10} placeholder="DD/MM/AAAA" pattern="\d{2}/\d{2}/\d{4}" value={flashStartDate} onChange={e => setFlashStartDate(maskDateBR(e.target.value))}/></label>
+              <label>Horário de início<input required type="time" step={60} value={flashStartTime} onChange={e => setFlashStartTime(e.target.value)}/></label>
+              <label>Data de encerramento<input required type="text" inputMode="numeric" autoComplete="off" maxLength={10} placeholder="DD/MM/AAAA" pattern="\d{2}/\d{2}/\d{4}" value={flashEndDate} onChange={e => setFlashEndDate(maskDateBR(e.target.value))}/></label>
+              <label>Horário de encerramento<input required type="time" step={60} value={flashEndTime} onChange={e => setFlashEndTime(e.target.value)}/></label>
+            </div>
+            <p className="flash-form-help">Informe a data como dia/mês/ano. A oferta entra no ar no início programado e desaparece da vitrine ao terminar; o preço de venda normal é preservado.</p>
+            <div className="form-actions"><button type="button" className="secondary-btn" disabled={flashSaving} onClick={() => setFlashProduct(null)}>Cancelar</button><button type="submit" className="primary-btn" disabled={flashSaving}>{flashSaving ? 'Salvando oferta…' : 'Salvar oferta relâmpago'}</button></div>
+          </form>
+        </div>
+      )}
     </>
   );
 }
 
 type ObjectLiteral =
-  Record<string, string>;
+  Record<string, string>

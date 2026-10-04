@@ -463,32 +463,31 @@ function flashOfferIsActive(product:any, now=Date.now()) {
   if(product?.flashOffer!==true) return false;
   const starts=timestampMillis(product.flashOfferStartsAt);
   const ends=timestampMillis(product.flashOfferEndsAt);
-  return (!starts || starts<=now) && (!ends || ends>now);
+  return starts>0 && ends>0 && starts<=now && ends>now;
 }
 
 function effectiveProductPrice(product:any, now=Date.now()) {
   const current=Number(product?.price||0);
-  if(flashOfferIsActive(product,now)) return current;
-  const normal=Number(product?.compareAtPrice||0);
-  return normal>current ? normal : current;
+  if(flashOfferIsActive(product,now)) {
+    const promotional=Number(product?.flashOfferPrice||0);
+    if(promotional>0 && promotional<current) return promotional;
+  }
+  return current;
 }
 
 function publicProductPayload(doc:any) {
-  const product={id:doc.id,...doc.data()};
-  if(product.flashOffer===true) {
-    const ends=timestampMillis(product.flashOfferEndsAt);
-    if(ends && ends<=Date.now()) {
-      const normal=Number(product.compareAtPrice||0);
-      const current=Number(product.price||0);
-      return {
-        ...product,
-        flashOffer:false,
-        price:normal>current?normal:current,
-        compareAtPrice:null
-      };
-    }
-  }
-  return product;
+  const product=doc.data();
+  // Normaliza Timestamp do Firestore para milissegundos no payload callable.
+  // Isso evita que a serialização do callable esconda a oferta da vitrine pública.
+  // O preço de venda permanece intacto; a oferta é uma camada temporária.
+  const startsAt=timestampMillis(product.flashOfferStartsAt);
+  const endsAt=timestampMillis(product.flashOfferEndsAt);
+  return {
+    id:doc.id,
+    ...product,
+    flashOfferStartsAt:startsAt||null,
+    flashOfferEndsAt:endsAt||null
+  };
 }
 
 function normalizeItems(rawItems: CheckoutItem[]) {
