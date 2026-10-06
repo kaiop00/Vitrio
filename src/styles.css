@@ -4030,3 +4030,163 @@ button[disabled],.primary-btn[disabled],.secondary-btn[disabled]{cursor:not-allo
 .flash-form-help{margin:0;color:#9eabc2;font-size:12px;line-height:1.5}
 .flash-config-modal .form-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap}
 @media(max-width:520px){.flash-date-grid{grid-template-columns:1fr 1fr;gap:9px}.flash-config-modal{padding:17px}.flash-config-modal .form-actions>*{flex:1}}
+
+/* =========================================================
+   VITRIO — PADRONIZAÇÃO DOS CARDS DO CATÁLOGO
+   Cards com altura fixa e descrição limitada
+   ========================================================= */
+
+.catalog-card{
+  display:flex;
+  flex-direction:column;
+  height:475px;
+  min-height:475px;
+}
+
+.catalog-card .product-image-button{
+  flex:0 0 240px;
+  height:240px;
+}
+
+.catalog-card .catalog-body{
+  flex:1;
+  min-height:0;
+  display:flex;
+  flex-direction:column;
+  padding:16px;
+}
+
+/* Área das etiquetas */
+.catalog-card .storefront-flags{
+  min-height:0;
+  display:flex;
+  align-items:center;
+  gap:6px;
+  flex-wrap:wrap;
+}
+
+/* Nome do produto limitado a 2 linhas */
+.catalog-card .product-title-button{
+  flex:0 0 auto;
+  min-height:38px;
+  padding:0;
+  text-align:left;
+}
+
+.catalog-card .product-title-button h3{
+  display:-webkit-box;
+  -webkit-box-orient:vertical;
+  -webkit-line-clamp:2;
+  overflow:hidden;
+
+  margin:0 0 7px;
+  line-height:1.2;
+}
+
+/* Descrição limitada a 4 linhas */
+.catalog-card .catalog-body > p{
+  flex:0 0 auto;
+
+  display:-webkit-box;
+  -webkit-box-orient:vertical;
+  -webkit-line-clamp:4;
+  overflow:hidden;
+
+  height:76px;
+  min-height:76px;
+  max-height:76px;
+
+  margin:0;
+  color:#73798a;
+  line-height:1.45;
+}
+
+/* Preço sempre fica na mesma região */
+.catalog-card .store-price{
+  flex:0 0 auto;
+  margin-top:auto;
+  margin-bottom:10px;
+}
+
+/* Disponibilidade + botão sempre no rodapé */
+.catalog-card .price-row{
+  flex:0 0 auto;
+}
+
+/* Garante que os cards da grade tenham comportamento uniforme */
+.catalog-grid{
+  align-items:stretch;
+}
+
+
+/* =========================================================
+   MOBILE
+   ========================================================= */
+
+@media(max-width:600px){
+
+  .catalog-card{
+    height:430px;
+    min-height:430px;
+  }
+
+  .catalog-card .product-image-button,
+  .catalog-card img,
+  .catalog-card .catalog-placeholder{
+    flex:0 0 190px;
+    height:190px;
+  }
+
+  .catalog-card .catalog-body{
+    padding:12px;
+  }
+
+  .catalog-card .product-title-button{
+    min-height:36px;
+  }
+
+  .catalog-card .product-title-button h3{
+    font-size:15px;
+    -webkit-line-clamp:2;
+  }
+
+  .catalog-card .catalog-body > p{
+    height:58px;
+    min-height:58px;
+    max-height:58px;
+
+    font-size:13px;
+    line-height:1.45;
+    -webkit-line-clamp:3;
+  }
+
+  .catalog-card .store-price{
+    margin-top:auto;
+    margin-bottom:8px;
+  }
+
+  .price-row{
+    align-items:flex-end;
+    flex-direction:column;
+  }
+
+  .price-row button{
+    width:100%;
+  }
+}
+
+@media(max-width:430px){
+
+  .catalog-card{
+    height:445px;
+    min-height:445px;
+  }
+
+  .catalog-card .product-image-button,
+  .catalog-card img,
+  .catalog-card .catalog-placeholder{
+    flex:0 0 200px;
+    height:200px;
+  }
+}
+
