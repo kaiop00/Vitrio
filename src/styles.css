@@ -4190,3 +4190,81 @@ button[disabled],.primary-btn[disabled],.secondary-btn[disabled]{cursor:not-allo
   }
 }
 
+
+/* =========================================================
+   VITRIO — DESCRIÇÃO DOS CARDS
+   Fade suave em vez de corte/reticências
+   ========================================================= */
+
+.catalog-card .catalog-body > p{
+  position:relative;
+
+  display:block;
+  overflow:hidden;
+
+  height:76px;
+  min-height:76px;
+  max-height:76px;
+
+  line-height:1.45;
+
+  /* Remove o efeito de "..." do line-clamp */
+  -webkit-line-clamp:unset;
+  -webkit-box-orient:initial;
+}
+
+/* Desaparecimento suave da descrição */
+.catalog-card .catalog-body > p::after{
+  content:"";
+  position:absolute;
+  left:0;
+  right:0;
+  bottom:0;
+
+  height:28px;
+
+  background:linear-gradient(
+    to bottom,
+    rgba(255,255,255,0),
+    rgba(255,255,255,0.92) 65%,
+    rgba(255,255,255,1)
+  );
+
+  pointer-events:none;
+}
+
+/* Mantém o preço separado visualmente da descrição */
+.catalog-card .store-price{
+  position:relative;
+  z-index:1;
+  margin-top:auto;
+}
+
+
+/* =========================================================
+   MOBILE
+   ========================================================= */
+
+@media(max-width:600px){
+
+  .catalog-card .catalog-body > p{
+    height:58px;
+    min-height:58px;
+    max-height:58px;
+
+    -webkit-line-clamp:unset;
+    -webkit-box-orient:initial;
+  }
+
+  .catalog-card .catalog-body > p::after{
+    height:24px;
+
+    background:linear-gradient(
+      to bottom,
+      rgba(255,255,255,0),
+      rgba(255,255,255,0.92) 65%,
+      rgba(255,255,255,1)
+    );
+  }
+}
+
