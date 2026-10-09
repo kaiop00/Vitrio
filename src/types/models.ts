@@ -2,7 +2,7 @@ export type Role = 'admin' | 'merchant';
 
 export type CheckoutMode = 'whatsapp' | 'online' | 'both';
 
-export type FulfillmentType = 'pickup' | 'delivery';
+export type FulfillmentType = 'pickup' | 'delivery' | 'shipping';
 
 export type OrderStatus =
   | 'pending_payment'
@@ -57,6 +57,7 @@ export interface Store {
   whatsapp?: string;
   instagram?: string;
   address?: string;
+  shippingAddress?: ShippingAddress;
   primaryColor?: string;
   active: boolean;
   createdAt?: unknown;
@@ -90,6 +91,9 @@ export interface Store {
   supportPhone?: string;
   monthlySalesGoal?: number;
   catalogAccessEnabled?: boolean;
+   melhorEnvioConnected?: boolean;
+   melhorEnvioEnvironment?: 'production';
+   shippingOriginCep?: string;
 }
 
 export interface Category {
@@ -164,6 +168,11 @@ export interface Product {
   flashOfferEndsAt?:any;
   availableForPickup?:boolean;
   availableForDelivery?:boolean;
+  availableForShipping?:boolean;
+  shippingWeightGrams?:number;
+  shippingWidthCm?:number;
+  shippingHeightCm?:number;
+  shippingLengthCm?:number;
   maxPerOrder?:number;
   variants?:ProductVariant[];
   addonGroups?:ProductAddonGroup[];
@@ -190,6 +199,18 @@ export interface OrderItem {
   addons?: AddonSelection[];
 }
 
+export interface ShippingAddress {
+  recipientName?: string;
+  postalCode?: string;
+  street?: string;
+  number?: string;
+  complement?: string;
+  neighborhood?: string;
+  city?: string;
+  state?: string;
+  reference?: string;
+}
+
 export interface Order {
   id: string;
   storeId: string;
@@ -198,6 +219,7 @@ export interface Order {
   customerEmail?: string;
   fulfillment: FulfillmentType;
   address?: string;
+  shippingAddress?: ShippingAddress;
   paymentMethod: string;
   source?: string;
   items: OrderItem[];
@@ -207,6 +229,10 @@ export interface Order {
   deliveryFee: number;
   deliveryZoneId?: string;
   deliveryZoneName?: string;
+  destinationCep?: string;
+  shippingServiceId?: string;
+  shippingServiceName?: string;
+  shippingOptions?: Array<{id:string;name:string;companyName?:string;companyId?:string;price:number;deliveryTime?:number;deliveryRange?:{min?:number;max?:number}|null}>;
   total: number;
   status: OrderStatus;
   paymentStatus: PaymentStatus;

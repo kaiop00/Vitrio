@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { collection, doc, getDoc, onSnapshot, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { ArrowRight, Clock3, MapPin, MessageCircle, Phone, Printer, Search, ShieldCheck, XCircle } from 'lucide-react';
+import { ArrowRight, Clock3, MapPin, MessageCircle, Package, Phone, Printer, Search, ShieldCheck, XCircle } from 'lucide-react';
 import { db, functions } from '../../lib/firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import { useUi } from '../../contexts/UiContext';
@@ -13,7 +13,7 @@ const payLabels:Record<PaymentStatus,string>={pending:'Pagamento pendente',paid:
 const money=(v:number)=>v.toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 const deliveryFlow:OrderStatus[]=['paid','preparing','ready','out_for_delivery','completed'];
 const pickupFlow:OrderStatus[]=['paid','preparing','ready','completed'];
-const orderFlow=(o:Order)=>o.fulfillment==='delivery'?deliveryFlow:pickupFlow;
+const orderFlow=(o:Order)=>o.fulfillment==='delivery'||o.fulfillment==='shipping'?deliveryFlow:pickupFlow;
 const ageMinutes=(o:Order)=>o.createdAt?.seconds?Math.max(0,Math.floor((Date.now()-Number(o.createdAt.seconds)*1000)/60000)):0;
 const age=(o:Order)=>{const min=ageMinutes(o);if(!o.createdAt?.seconds)return'';return min<60?`${min} min`:min<1440?`${Math.floor(min/60)}h ${min%60}min`:`${Math.floor(min/1440)}d`;};
 const stepIndex=(o:Order)=>orderFlow(o).indexOf(o.status);
@@ -70,7 +70,7 @@ export function OrdersPage(){
  const operationalOrders=useMemo(()=>orders.filter(o=>isToday(o)||isOpenOrder(o)),[orders]);
  const visible=useMemo(()=>operationalOrders.filter(o=>(filter==='all'||o.status===filter)&&`${o.customerName} ${o.customerPhone} ${o.id}`.toLowerCase().includes(search.toLowerCase())),[operationalOrders,filter,search]);
 
- function printOrder(o:Order){const w=window.open('','_blank','width=480,height=700');if(!w)return;w.document.write(`<!doctype html><html><head><title>Pedido ${o.id}</title><style>body{font:14px Arial;padding:22px;color:#111}h1{font-size:20px}hr{border:0;border-top:1px dashed #aaa}.row{display:flex;justify-content:space-between;margin:8px 0}.muted{color:#666}</style></head><body><h1>Pedido #${o.id.slice(0,6).toUpperCase()}</h1><div>${o.customerName}</div><div>${o.customerPhone}</div><div>${o.fulfillment==='delivery'?'Entrega':'Retirada'} ${o.deliveryZoneName?`· ${o.deliveryZoneName}`:''}</div>${o.address?`<div>${o.address}</div>`:''}<hr>${o.items.map(i=>`<div class="row"><span>${i.quantity}x ${i.name}${i.variantName?` (${i.variantName})`:''}${(i.addons||[]).length?`<br><small>${i.addons!.map(a=>`${a.groupName}: ${a.optionName}`).join(' · ')}</small>`:''}</span><b>${money(i.subtotal)}</b></div>`).join('')}<hr><div class="row"><span>Subtotal</span><b>${money(o.subtotal)}</b></div>${o.discount?`<div class="row"><span>Desconto</span><b>-${money(o.discount)}</b></div>`:''}${o.deliveryFee?`<div class="row"><span>Entrega</span><b>${money(o.deliveryFee)}</b></div>`:''}<div class="row"><strong>Total</strong><strong>${money(o.total)}</strong></div><p>Pagamento: ${o.paymentMethod} · ${payLabels[o.paymentStatus]}</p>${o.customerNotes?`<p><b>Observação do cliente:</b> ${o.customerNotes}</p>`:''}${o.merchantNotes?`<p><b>Observação interna:</b> ${o.merchantNotes}</p>`:''}<script>window.onload=()=>window.print()</script></body></html>`);w.document.close();}
+ function printOrder(o:Order){const w=window.open('','_blank','width=480,height=700');if(!w)return;w.document.write(`<!doctype html><html><head><title>Pedido ${o.id}</title><style>body{font:14px Arial;padding:22px;color:#111}h1{font-size:20px}hr{border:0;border-top:1px dashed #aaa}.row{display:flex;justify-content:space-between;margin:8px 0}.muted{color:#666}</style></head><body><h1>Pedido #${o.id.slice(0,6).toUpperCase()}</h1><div>${o.customerName}</div><div>${o.customerPhone}</div><div>${o.fulfillment==='delivery'?'Entrega local':o.fulfillment==='shipping'?'Envio':'Retirada'} ${o.deliveryZoneName?`· ${o.deliveryZoneName}`:''}${o.shippingServiceName?` · ${o.shippingServiceName}`:''}</div>${o.address?`<div>${o.address}</div>`:''}<hr>${o.items.map(i=>`<div class="row"><span>${i.quantity}x ${i.name}${i.variantName?` (${i.variantName})`:''}${(i.addons||[]).length?`<br><small>${i.addons!.map(a=>`${a.groupName}: ${a.optionName}`).join(' · ')}</small>`:''}</span><b>${money(i.subtotal)}</b></div>`).join('')}<hr><div class="row"><span>Subtotal</span><b>${money(o.subtotal)}</b></div>${o.discount?`<div class="row"><span>Desconto</span><b>-${money(o.discount)}</b></div>`:''}${o.deliveryFee?`<div class="row"><span>Entrega</span><b>${money(o.deliveryFee)}</b></div>`:''}<div class="row"><strong>Total</strong><strong>${money(o.total)}</strong></div><p>Pagamento: ${o.paymentMethod} · ${payLabels[o.paymentStatus]}</p>${o.customerNotes?`<p><b>Observação do cliente:</b> ${o.customerNotes}</p>`:''}${o.merchantNotes?`<p><b>Observação interna:</b> ${o.merchantNotes}</p>`:''}<script>window.onload=()=>window.print()</script></body></html>`);w.document.close();}
  async function enableNotifications(){if(typeof Notification==='undefined')return;const permission=await Notification.requestPermission();setNotifications(permission==='granted');}
  function nextStatus(o:Order):OrderStatus|null{
   if(o.status==='pending_payment')return o.paymentStatus==='paid'?'paid':null;
@@ -85,9 +85,104 @@ export function OrdersPage(){
  {loading?<LoadingState rows={5} label="Carregando pedidos..."/>:<><div className="order-summary-grid"><div className="order-summary-card"><small>Em andamento</small><strong>{stats.open}</strong></div><div className="order-summary-card"><small>Em preparo</small><strong>{stats.preparing}</strong></div><div className="order-summary-card"><small>Prontos</small><strong>{stats.ready}</strong></div><div className="order-summary-card"><small>Vendas de hoje</small><strong>{money(stats.today)}</strong></div></div>
  <div className="panel order-toolbar polished"><label className="search-box"><Search size={18}/><input placeholder="Buscar cliente, telefone ou pedido" value={search} onChange={e=>setSearch(e.target.value)}/></label><div className="order-filter-chips"><button className={filter==='all'?'active':''} onClick={()=>setFilter('all')}>Todos</button>{(['paid','preparing','ready','out_for_delivery','completed'] as OrderStatus[]).map(v=><button key={v} className={filter===v?'active':''} onClick={()=>setFilter(v)}>{labels[v]}</button>)}</div></div>
  <div className="order-list">{visible.length===0?<div className="empty-state"><h3>Nenhum pedido para a operação de hoje</h3><p>Novos pedidos aparecerão aqui em tempo real. Pedidos antigos finalizados ficam disponíveis em Relatórios.</p></div>:visible.map(o=><article className={`order-card ${ageMinutes(o)>=30&&!["completed","cancelled"].includes(o.status)?"order-needs-attention":""}`} key={o.id}>
-   <div className="order-top"><div><small>Pedido #{o.id.slice(0,6).toUpperCase()} {age(o)&&<span className="order-age"><Clock3 size={12}/>{age(o)}</span>}{ageMinutes(o)>=30&&!['completed','cancelled'].includes(o.status)&&<span className="attention-chip">Atenção</span>}</small><h3>{o.customerName}</h3><span>{o.fulfillment==='delivery'?'Entrega':'Retirada'} · {o.paymentMethod}</span></div><div className="order-total-actions"><strong>{money(o.total)}</strong><button className="icon-btn" title="Imprimir pedido" onClick={()=>printOrder(o)}><Printer size={17}/></button></div></div>
+   <div className="order-top"><div><small>Pedido #{o.id.slice(0,6).toUpperCase()} {age(o)&&<span className="order-age"><Clock3 size={12}/>{age(o)}</span>}{ageMinutes(o)>=30&&!['completed','cancelled'].includes(o.status)&&<span className="attention-chip">Atenção</span>}</small><h3>{o.customerName}</h3><span>{o.fulfillment==='delivery'?'Entrega local':o.fulfillment==='shipping'?'Envio':'Retirada'} · {o.paymentMethod}</span></div><div className="order-total-actions"><strong>{money(o.total)}</strong><button className="icon-btn" title="Imprimir pedido" onClick={()=>printOrder(o)}><Printer size={17}/></button></div></div>
    {!['pending_payment','cancelled'].includes(o.status)&&<div className="order-progress" aria-label="Progresso do pedido">{orderFlow(o).map((st,i)=><span key={st} className={i<=stepIndex(o)?'done':''} title={labels[st]} />)}</div>}
-   <div className="customer-meta"><span><Phone size={15}/>{o.customerPhone}</span>{o.fulfillment==='delivery'&&o.address&&<span><MapPin size={15}/>{o.address}</span>}</div>
+   <div className="customer-meta">
+     <span><Phone size={15}/>{o.customerPhone || 'Telefone não informado'}</span>
+     {(o.fulfillment === 'delivery' || o.fulfillment === 'shipping') && o.address && <span><MapPin size={15}/>{o.address}</span>}
+   </div>
+
+   {o.fulfillment === 'shipping' && (() => {
+     const address = o.shippingAddress || {};
+     const selectedService = (o.shippingOptions || []).find(
+       service => service.id === o.shippingServiceId
+     );
+     const cep = address.postalCode || o.destinationCep || '';
+     const addressLine = [
+       address.street,
+       address.number,
+       address.complement,
+       address.neighborhood
+     ].filter(Boolean).join(', ');
+     const cityLine = [
+       address.city,
+       address.state
+     ].filter(Boolean).join(' - ');
+     const recipient = address.recipientName || o.customerName;
+     const serviceName = selectedService?.name || o.shippingServiceName || 'Não registrado';
+     const carrier = selectedService?.companyName;
+     const deliveryTime = selectedService?.deliveryRange
+       ? `${selectedService.deliveryRange.min ?? '?'} a ${selectedService.deliveryRange.max ?? '?'} dias úteis`
+       : selectedService?.deliveryTime
+         ? `${selectedService.deliveryTime} dias úteis`
+         : 'Prazo não registrado';
+
+     return (
+       <section className="order-shipping-details">
+         <div className="order-shipping-heading">
+           <Package size={19}/>
+           <div>
+             <strong>Informações de envio</strong>
+             <small>Confira os dados registrados neste pedido antes de despachar.</small>
+           </div>
+         </div>
+
+         <div className="order-shipping-grid">
+           <div>
+             <small>Destinatário</small>
+             <strong>{recipient || 'Não informado'}</strong>
+           </div>
+           <div>
+             <small>Telefone para contato</small>
+             <strong>{o.customerPhone || 'Não informado'}</strong>
+           </div>
+           <div className="shipping-address-field">
+             <small>Rua, número e complemento</small>
+             <strong>{addressLine || o.address || 'Endereço não registrado'}</strong>
+           </div>
+           <div>
+             <small>Bairro</small>
+             <strong>{address.neighborhood || 'Não informado'}</strong>
+           </div>
+           <div>
+             <small>Cidade / estado</small>
+             <strong>{cityLine || 'Não informado'}</strong>
+           </div>
+           <div>
+             <small>CEP de destino</small>
+             <strong>{cep || 'Não informado'}</strong>
+           </div>
+           <div>
+             <small>Transportadora</small>
+             <strong>{carrier || 'Consulte a modalidade selecionada'}</strong>
+           </div>
+           <div>
+             <small>Modalidade de envio</small>
+             <strong>{serviceName}</strong>
+           </div>
+           <div>
+             <small>Frete registrado</small>
+             <strong>{money(Number(o.deliveryFee || 0))}</strong>
+           </div>
+           <div>
+             <small>Prazo estimado</small>
+             <strong>{deliveryTime}</strong>
+           </div>
+           {address.reference && <div className="shipping-address-field">
+             <small>Ponto de referência</small>
+             <strong>{address.reference}</strong>
+           </div>}
+         </div>
+
+         {o.customerNotes && (
+           <div className="order-shipping-note">
+             <strong>Observação do cliente</strong>
+             <p>{o.customerNotes}</p>
+           </div>
+         )}
+       </section>
+     );
+   })()}
    <div className="order-items">{o.items.map((i,index)=><span key={`${i.productId}-${i.variantId||''}-${index}`}>{i.quantity}x {i.name}{i.variantName?` · ${i.variantName}`:''}{(i.addons||[]).length?<small>{i.addons!.map(a=>`${a.groupName}: ${a.optionName}`).join(' · ')}</small>:null}</span>)}</div>
    <div className="payment-server-status"><ShieldCheck size={17}/><div><small>Pagamento</small><strong>{payLabels[o.paymentStatus]}</strong></div>{!isIntegratedPayment(o)&&o.paymentStatus==='pending'&&o.status!=='cancelled'&&<button className="secondary-btn" disabled={busyIds[o.id]} onClick={()=>confirmManualPayment(o.id)}>{busyIds[o.id]?'Processando...':'Confirmar pagamento'}</button>}</div>
    {o.customerNotes&&<div className="customer-order-note"><strong>Observação do cliente</strong><p>{o.customerNotes}</p></div>}<label className="order-note">Observação interna<textarea placeholder="Ex.: cliente pediu para ligar antes da entrega" value={o.merchantNotes||''} onChange={e=>setOrders(xs=>xs.map(x=>x.id===o.id?{...x,merchantNotes:e.target.value}:x))} onBlur={e=>update(o.id,{merchantNotes:e.target.value})}/></label>

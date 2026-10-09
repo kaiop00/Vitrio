@@ -1,4 +1,5 @@
-import { onCall, HttpsError } from 'firebase-functions/v2/https';
+import { onCall, onRequest, HttpsError } from 'firebase-functions/v2/https';
+import { defineSecret } from 'firebase-functions/params';
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getMessaging } from 'firebase-admin/messaging';
@@ -505,9 +506,199 @@ function normalizeItems(rawItems: CheckoutItem[]) {
   return normalized;
 }
 
+async function calculateMelhorEnvioShipping(params:{storeId:string; destinationCep:string; selectedServiceId?:string}) {
+  const storeSnap = await db.doc(`stores/${params.storeId}`).get();
+  if (!storeSnap.exists) throw new HttpsError('not-found','Loja indisponível.');
+  const store = storeSnap.data() || {};
+  const originCep = String(store.shippingOriginCep || '').replace(/\D/g,'');
+  const destinationCep = String(params.destinationCep || '').replace(/\D/g,'');
+  if (originCep.length !== 8) throw new HttpsError('failed-precondition','A loja ainda não cadastrou o CEP de origem dos envios.');
+  if (destinationCep.length !== 8) throw new HttpsError('invalid-argument','Informe um CEP de destino válido.');
+
+  const integration = await getValidMelhorEnvioIntegration(params.storeId);
+  const productSnap = await db.collection('products').where('storeId','==',params.storeId).where('active','==',true).get();
+  const byId = new Map(productSnap.docs.map(d => [d.id,d.data()]));
+  return {store, integration, originCep, destinationCep, byId};
+}
+
+async function quoteMelhorEnvio(params:{storeId:string; destinationCep:string; items:CheckoutItem[]; selectedServiceId?:string}) {
+  const base = await calculateMelhorEnvioShipping({storeId:params.storeId,destinationCep:params.destinationCep,selectedServiceId:params.selectedServiceId});
+  const products:any[] = [];
+  for (const item of params.items) {
+    const p = base.byId.get(item.productId);
+    if (!p || p.availableForShipping === false) throw new HttpsError('failed-precondition',`${String(p?.name||'Um produto')} não está disponível para envio.`);
+    const weight = Number(p.shippingWeightGrams || 0) / 1000;
+    const width = Number(p.shippingWidthCm || 0);
+    const height = Number(p.shippingHeightCm || 0);
+    const length = Number(p.shippingLengthCm || 0);
+    if (!(weight > 0) || !(width > 0) || !(height > 0) || !(length > 0)) {
+      throw new HttpsError('failed-precondition',`Informe peso e dimensões de envio do produto ${String(p.name||'Produto')}.`);
+    }
+    products.push({id:String(item.productId),width,height,length,weight,insurance_value:Number(effectiveProductPrice(p)||0),quantity:Number(item.quantity||1)});
+  }
+  const integration:any = base.integration;
+  const headers = {
+    Authorization:`Bearer ${integration.accessToken}`,
+    'Content-Type':'application/json',
+    Accept:'application/json',
+    'User-Agent':'Vitrio (contato@vitrio.app)'
+  };
+  const requestBody = {
+    from:{postal_code:base.originCep},
+    to:{postal_code:base.destinationCep},
+    products,
+    options:{receipt:false,own_hand:false}
+  };
+
+  console.log('melhorEnvioQuoteRequest', {
+    storeId:params.storeId,
+    from:base.originCep,
+    to:base.destinationCep,
+    products,
+    endpoint:`${MELHOR_ENVIO_BASE_URL}/api/v2/me/shipment/calculate`
+  });
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+
+  let response: Response;
+  try {
+    response = await fetch(`${MELHOR_ENVIO_BASE_URL}/api/v2/me/shipment/calculate`,{
+      method:'POST',
+      headers,
+      body:JSON.stringify(requestBody),
+      signal:controller.signal
+    });
+  } catch (error:any) {
+    const message = error?.name === 'AbortError'
+      ? 'O Melhor Envio demorou mais de 20 segundos para responder.'
+      : `Falha de comunicação com o Melhor Envio: ${String(error?.message || error)}`;
+    console.error('melhorEnvioQuoteNetworkError', { message, requestBody });
+    throw new HttpsError('unavailable', message);
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  const raw = await response.text();
+  let payload:any={};
+  try{payload=raw?JSON.parse(raw):{};}catch{}
+
+  console.log('melhorEnvioQuoteResponse', {
+    status:response.status,
+    payload
+  });
+
+  if(!response.ok){
+    console.error('melhorEnvioQuoteHttpError',{
+      status:response.status,
+      payload,
+      requestBody
+    });
+
+    const apiErrors = payload?.errors && typeof payload.errors === 'object'
+      ? Object.entries(payload.errors)
+          .flatMap(([field,messages]:any)=>{
+            const values = Array.isArray(messages) ? messages : [messages];
+            return values.filter(Boolean).map((message:any)=>`${field}: ${typeof message === 'string' ? message : JSON.stringify(message)}`);
+          })
+          .join(' | ')
+      : '';
+    const apiMessage = typeof payload?.message === 'string' ? payload.message.trim() : '';
+
+    if (response.status === 401) {
+      throw new HttpsError(
+        'failed-precondition',
+        'A autorização do Melhor Envio expirou ou foi revogada. Conecte novamente a conta da loja.'
+      );
+    }
+
+    if (response.status === 403) {
+      throw new HttpsError(
+        'failed-precondition',
+        'O Melhor Envio recusou esta operação. Verifique se o aplicativo está autorizado com a permissão de cotação de fretes (shipping-calculate) e se os serviços de envio estão habilitados para a conta.'
+      );
+    }
+
+    throw new HttpsError(
+      'failed-precondition',
+      apiErrors
+        ? `O Melhor Envio recusou a cotação: ${apiErrors}`
+        : apiMessage
+          ? `O Melhor Envio recusou a cotação: ${apiMessage}`
+          : `Não foi possível calcular o frete pelo Melhor Envio (HTTP ${response.status}).`
+    );
+  }
+
+  // A resposta normal é um array de serviços. Mantemos suporte a respostas
+  // encapsuladas em "data" para facilitar diagnóstico caso a API altere o formato.
+  const rawOptions:any[] = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.data)
+      ? payload.data
+      : [];
+
+  const errorText = (value:any): string => {
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value)) return value.map(errorText).filter(Boolean).join(', ');
+    if (value && typeof value === 'object') {
+      return Object.entries(value).map(([key,val]) => `${key}: ${errorText(val)}`).filter(Boolean).join(', ');
+    }
+    return String(value ?? '');
+  };
+
+  const rejected = rawOptions
+    .filter((x:any)=>x && x.error)
+    .map((x:any)=>({
+      id:x.id??null,
+      name:x.name??x.company?.name??'Serviço',
+      error:errorText(x.error)
+    }));
+
+  const options = rawOptions
+    .filter((x:any)=>x && !x.error && Number.isFinite(Number(x.custom_price ?? x.price)))
+    .map((x:any)=>({
+      id:String(x.id||''),
+      name:String(x.name||'Envio'),
+      companyName:String(x.company?.name||''),
+      companyId:x.company?.id != null ? String(x.company.id) : '',
+      price:Number(Number(x.custom_price ?? x.price ?? 0).toFixed(2)),
+      deliveryTime:Number(x.custom_delivery_time ?? x.delivery_time ?? 0),
+      deliveryRange:x.custom_delivery_range || x.delivery_range || null,
+      packages:Array.isArray(x.packages)?x.packages:[]
+    }))
+    .filter((x:any)=>x.id && Number.isFinite(x.price));
+
+  options.sort((a:any,b:any)=>a.price-b.price);
+
+  if(!options.length){
+    console.error('melhorEnvioQuoteNoOptions',{
+      status:response.status,
+      from:base.originCep,
+      to:base.destinationCep,
+      products,
+      rawOptions,
+      rejected
+    });
+
+    const reasons = rejected
+      .map((x:any)=>`${String(x.name||'Serviço')}: ${String(x.error)}`)
+      .filter(Boolean)
+      .join(' | ');
+
+    throw new HttpsError(
+      'failed-precondition',
+      reasons
+        ? `O Melhor Envio não encontrou uma modalidade disponível para este pacote. ${reasons}`
+        : 'O Melhor Envio não encontrou uma modalidade disponível para este CEP e pacote. Verifique o CEP de origem, o CEP de destino e peso/dimensões do produto.'
+    );
+  }
+  const selected = params.selectedServiceId ? options.find((x:any)=>x.id===String(params.selectedServiceId)) : null;
+  return {options,selected};
+}
+
 async function calculateQuote(data: any) {
   const storeId = String(data.storeId || '');
-  const fulfillment = data.fulfillment === 'delivery' ? 'delivery' : 'pickup';
+  const fulfillment = data.fulfillment === 'shipping' ? 'shipping' : (data.fulfillment === 'delivery' ? 'delivery' : 'pickup');
   const couponCode = String(data.couponCode || '').trim().toUpperCase();
   const deliveryZoneId = String(data.deliveryZoneId || '');
   const rawItems: CheckoutItem[] = Array.isArray(data.items) ? data.items : [];
@@ -531,6 +722,7 @@ async function calculateQuote(data: any) {
     if (p.storeId !== storeId || p.active !== true) throw new HttpsError('failed-precondition', 'Um produto não está mais disponível.');
     if (fulfillment === 'pickup' && p.availableForPickup === false) throw new HttpsError('failed-precondition', `${p.name} não está disponível para retirada.`);
     if (fulfillment === 'delivery' && p.availableForDelivery === false) throw new HttpsError('failed-precondition', `${p.name} não está disponível para entrega.`);
+    if (fulfillment === 'shipping' && p.availableForShipping === false) throw new HttpsError('failed-precondition', `${p.name} não está disponível para envio.`);
     const maxPerOrder = Math.max(0, Number(p.maxPerOrder || 0));
     if (maxPerOrder > 0 && quantity > maxPerOrder) throw new HttpsError('failed-precondition', `Limite de ${maxPerOrder} unidade(s) por pedido para ${p.name}.`);
     const variants=Array.isArray(p.variants)?p.variants:[];
@@ -597,6 +789,22 @@ async function calculateQuote(data: any) {
     }
   }
 
+  let shippingServiceId = '', shippingServiceName = '', shippingOptions:any[] = [];
+  const destinationCep = String(data.destinationCep || '').replace(/\D/g,'');
+  if (fulfillment === 'shipping') {
+    if (store.melhorEnvioConnected !== true) throw new HttpsError('failed-precondition','A loja ainda não conectou o Melhor Envio.');
+    if (destinationCep.length !== 8) throw new HttpsError('invalid-argument','Informe um CEP de destino válido.');
+    const shipping = await quoteMelhorEnvio({storeId,destinationCep,items:entries.map(x=>({productId:x.productId,quantity:x.quantity,variantId:x.variantId,addonOptionIds:x.addonOptionIds})),selectedServiceId:String(data.shippingServiceId||'')});
+    shippingOptions = shipping.options;
+    if (shipping.selected) {
+      deliveryFee = shipping.selected.price;
+      shippingServiceId = shipping.selected.id;
+      shippingServiceName = shipping.selected.companyName ? `${shipping.selected.companyName} — ${shipping.selected.name}` : shipping.selected.name;
+    } else if (String(data.shippingServiceId||'')) {
+      throw new HttpsError('invalid-argument','A opção de envio selecionada não está mais disponível.');
+    }
+  }
+
   let discount = 0, appliedCoupon = '';
   if (couponCode) {
     const q = await db.collection('coupons').where('storeId','==',storeId).where('code','==',couponCode).limit(1).get();
@@ -616,6 +824,9 @@ async function calculateQuote(data: any) {
     fulfillment === 'delivery' && store.deliveryFeeMode !== 'default'
       ? deliveryZoneId
       : '';
+  if (fulfillment === 'shipping' && !shippingServiceId) {
+    return {store,items,subtotal,discount,couponCode:appliedCoupon,deliveryFee:0,deliveryZoneId:'',deliveryZoneName:'',shippingServiceId:'',shippingServiceName:'',shippingOptions,total:Number(Math.max(0,subtotal-discount).toFixed(2)),destinationCep};
+  }
 
   return {
     store,
@@ -626,6 +837,10 @@ async function calculateQuote(data: any) {
     deliveryFee,
     deliveryZoneId:appliedDeliveryZoneId,
     deliveryZoneName,
+    shippingServiceId,
+    shippingServiceName,
+    shippingOptions,
+    destinationCep,
     total
   };
 }
@@ -661,7 +876,8 @@ function publicStorePayload(doc:any, store:any, slug:string){
     orderPrefix:String(store.orderPrefix||''),
     returnPolicy:String(store.returnPolicy||''),
     supportPhone:String(store.supportPhone||''),
-    catalogAccessEnabled:store.catalogAccessEnabled===true
+    catalogAccessEnabled:store.catalogAccessEnabled===true,
+    melhorEnvioConnected:store.melhorEnvioConnected===true
   };
 }
 
@@ -748,7 +964,7 @@ export const getPublicStoreBySlug = onCall({region:'us-central1'}, async request
 
 export const getCheckoutQuote = onCall({ region:'us-central1' }, async request => {
   const q = await calculateQuote(request.data || {});
-  return {subtotal:q.subtotal,discount:q.discount,couponCode:q.couponCode,deliveryFee:q.deliveryFee,deliveryZoneName:q.deliveryZoneName,total:q.total};
+  return {subtotal:q.subtotal,discount:q.discount,couponCode:q.couponCode,deliveryFee:q.deliveryFee,deliveryZoneName:q.deliveryZoneName,shippingServiceId:q.shippingServiceId||'',shippingServiceName:q.shippingServiceName||'',shippingOptions:q.shippingOptions||[],destinationCep:q.destinationCep||'',total:q.total};
 });
 
 async function sendNewOrderPush(params:{
@@ -853,15 +1069,33 @@ export const createOrder = onCall({ region: 'us-central1' }, async (request) => 
   const customerName = String(data.customerName || '').trim();
   const customerPhone = String(data.customerPhone || '').replace(/[^0-9+]/g, '').trim();
   const customerEmail = String(data.customerEmail || '').trim().toLowerCase();
-  const fulfillment = data.fulfillment === 'delivery' ? 'delivery' : 'pickup';
+  const fulfillment = data.fulfillment === 'shipping' ? 'shipping' : (data.fulfillment === 'delivery' ? 'delivery' : 'pickup');
   const address = String(data.address || '').trim();
+  const rawShippingAddress = data.shippingAddress && typeof data.shippingAddress === 'object' ? data.shippingAddress : {};
+  const shippingAddress = fulfillment === 'shipping' ? {
+    recipientName: String(rawShippingAddress.recipientName || customerName).trim().slice(0,120),
+    postalCode: String(rawShippingAddress.postalCode || data.destinationCep || '').replace(/\D/g,'').slice(0,8),
+    street: String(rawShippingAddress.street || '').trim().slice(0,160),
+    number: String(rawShippingAddress.number || '').trim().slice(0,30),
+    complement: String(rawShippingAddress.complement || '').trim().slice(0,120),
+    neighborhood: String(rawShippingAddress.neighborhood || '').trim().slice(0,120),
+    city: String(rawShippingAddress.city || '').trim().slice(0,120),
+    state: String(rawShippingAddress.state || '').trim().toUpperCase().slice(0,2),
+    reference: String(rawShippingAddress.reference || '').trim().slice(0,160),
+  } : null;
   const paymentMethod = String(data.paymentMethod || '');
   const checkoutSource = data.checkoutSource === 'whatsapp' ? 'whatsapp' : 'system';
   const cashChangeFor = String(data.cashChangeFor || '').trim().slice(0, 30);
   const customerNotes = String(data.customerNotes || '').trim().slice(0, 500);
   const rawItems: CheckoutItem[] = Array.isArray(data.items) ? data.items : [];
   if (!storeId || !customerName || !customerPhone || rawItems.length === 0) throw new HttpsError('invalid-argument', 'Preencha seus dados e adicione produtos ao carrinho.');
-  if (fulfillment === 'delivery' && !address) throw new HttpsError('invalid-argument', 'Informe o endereço para entrega.');
+  if (fulfillment === 'delivery' && !address) throw new HttpsError('invalid-argument','Informe o endereço para entrega.');
+  if (fulfillment === 'shipping') {
+    if (!shippingAddress || shippingAddress.postalCode.length !== 8) throw new HttpsError('invalid-argument','Informe um CEP de destino válido.');
+    if (!shippingAddress.street || !shippingAddress.number || !shippingAddress.neighborhood || !shippingAddress.city || !shippingAddress.state) throw new HttpsError('invalid-argument','Preencha rua, número, bairro, cidade e estado para o envio.');
+  }
+  const destinationCep = String(data.destinationCep || '').replace(/\D/g,'');
+  if (fulfillment === 'shipping' && destinationCep.length !== 8) throw new HttpsError('invalid-argument','Informe um CEP de destino válido.');
 
   const quote = await calculateQuote(data);
   const configuredMode = quote.store.checkoutMode || 'whatsapp';
@@ -871,6 +1105,9 @@ export const createOrder = onCall({ region: 'us-central1' }, async (request) => 
     if (!['online','both'].includes(configuredMode)) throw new HttpsError('failed-precondition','Esta loja recebe pedidos somente pelo WhatsApp.');
   }
   if (fulfillment === 'pickup' && quote.store.allowPickup === false) throw new HttpsError('failed-precondition','Retirada não disponível.');
+  if (fulfillment === 'delivery' && quote.store.allowDelivery === false) throw new HttpsError('failed-precondition','Entrega não disponível.');
+  if (fulfillment === 'shipping' && quote.store.melhorEnvioConnected !== true) throw new HttpsError('failed-precondition','Envio pelo Melhor Envio não está disponível.');
+  if (fulfillment === 'shipping' && !quote.shippingServiceId) throw new HttpsError('invalid-argument','Selecione uma opção de envio.');
 
   if (paymentMethod === 'Dinheiro' && cashChangeFor) {
     const parsedChange = Number(cashChangeFor.replace(/\./g,'').replace(',','.'));
@@ -887,6 +1124,16 @@ export const createOrder = onCall({ region: 'us-central1' }, async (request) => 
     quote.store.allowCash!==false&&'Dinheiro'
   ].filter(Boolean);
   if (!allowedPayments.includes(paymentMethod)) throw new HttpsError('invalid-argument','Forma de pagamento indisponível.');
+
+  const shippingAddressLabel = shippingAddress ? [
+    `${shippingAddress.street}, ${shippingAddress.number}`,
+    shippingAddress.complement,
+    shippingAddress.neighborhood,
+    `${shippingAddress.city} - ${shippingAddress.state}`,
+    `CEP ${shippingAddress.postalCode.slice(0,5)}-${shippingAddress.postalCode.slice(5)}`,
+    shippingAddress.reference ? `Ref.: ${shippingAddress.reference}` : ''
+  ].filter(Boolean).join(' · ') : '';
+  const persistedAddress = fulfillment === 'shipping' ? shippingAddressLabel : address;
 
   const orderRef=db.collection('orders').doc();
   await db.runTransaction(async tx=>{
@@ -925,7 +1172,7 @@ export const createOrder = onCall({ region: 'us-central1' }, async (request) => 
     }
     for(const u of updates.values())tx.update(u.ref,{stock:u.data.stock,variants:u.data.variants||[],updatedAt:FieldValue.serverTimestamp()});
     const whatsappSale = checkoutSource === 'whatsapp';
-    tx.set(orderRef,{storeId,customerName,customerPhone,customerEmail,fulfillment,address:fulfillment==='delivery'?address:'',paymentMethod,cashChangeFor:paymentMethod==='Dinheiro'?cashChangeFor:'',customerNotes,items:quote.items,subtotal:quote.subtotal,discount:quote.discount,couponCode:quote.couponCode,deliveryFee:quote.deliveryFee,deliveryZoneId:quote.deliveryZoneId,deliveryZoneName:quote.deliveryZoneName,total:quote.total,status:'pending_payment',paymentStatus:'pending',paidAt:null,source:whatsappSale?'whatsapp_checkout':'vitrio_checkout',financialAppliedAt:null,createdAt:FieldValue.serverTimestamp()});
+    tx.set(orderRef,{storeId,customerName,customerPhone,customerEmail,fulfillment,address:(fulfillment==='delivery'||fulfillment==='shipping')?persistedAddress:'',shippingAddress:shippingAddress||null,paymentMethod,cashChangeFor:paymentMethod==='Dinheiro'?cashChangeFor:'',customerNotes,items:quote.items,subtotal:quote.subtotal,discount:quote.discount,couponCode:quote.couponCode,deliveryFee:quote.deliveryFee,deliveryZoneId:quote.deliveryZoneId,deliveryZoneName:quote.deliveryZoneName,shippingServiceId:quote.shippingServiceId||'',shippingServiceName:quote.shippingServiceName||'',shippingOptions:quote.shippingOptions||[],destinationCep:quote.destinationCep||destinationCep,total:quote.total,status:'pending_payment',paymentStatus:'pending',paidAt:null,source:whatsappSale?'whatsapp_checkout':'vitrio_checkout',financialAppliedAt:null,createdAt:FieldValue.serverTimestamp()});
   });
 
   if(quote.couponCode){
@@ -1351,7 +1598,8 @@ export const getPublicOrderTracking = onCall({region:'us-central1'}, async reque
       ? String(order.mercadoPagoPaymentId||'')
       : '',
     fulfillment:String(order.fulfillment||'pickup'),
-    address:order.fulfillment==='delivery'?String(order.address||''):'',
+    address:(order.fulfillment==='delivery'||order.fulfillment==='shipping')?String(order.address||''):'',
+    shippingAddress:order.fulfillment==='shipping'&&order.shippingAddress?order.shippingAddress:null,
     total:Number(order.total||0),
     items:(order.items||[]).map((i:any)=>({productId:String(i.productId||''),name:String(i.name||'Produto'),quantity:Number(i.quantity||0),subtotal:Number(i.subtotal||0),variantName:String(i.variantName||''),addons:Array.isArray(i.addons)?i.addons.map((a:any)=>({groupName:String(a.groupName||''),optionName:String(a.optionName||'')})):[]})),
     createdLabel:toLabel(order.createdAt),updatedLabel:toLabel(order.updatedAt),supportPhone:String(store.supportPhone||store.whatsapp||'')
@@ -1534,5 +1782,343 @@ export const unregisterPushDevice = onCall(
     }
 
     return { ok: true };
+  }
+);
+
+// ==================== MELHOR ENVIO (PRODUÇÃO) ====================
+
+const MELHOR_ENVIO_CLIENT_ID = '31041';
+const MELHOR_ENVIO_BASE_URL = 'https://melhorenvio.com.br';
+const MELHOR_ENVIO_CALLBACK_URL =
+  'https://southamerica-east1-teia-c860e.cloudfunctions.net/melhorEnvioOauthCallback';
+const VITRIO_MELHOR_ENVIO_RETURN_URL =
+  'https://vitrio.web.app/painel/minha-loja';
+
+const MELHOR_ENVIO_CLIENT_SECRET = defineSecret('MELHOR_ENVIO_CLIENT_SECRET');
+
+type MelhorEnvioIntegration = {
+  accessToken?: string;
+  refreshToken?: string;
+  expiresAt?: Timestamp;
+  refreshExpiresAt?: Timestamp;
+  melhorEnvioUserId?: string;
+  connectedAt?: Timestamp;
+  updatedAt?: Timestamp;
+};
+
+function melhorEnvioIntegrationRef(storeId: string) {
+  return db.doc(`stores/${storeId}/integrations/melhorEnvio`);
+}
+
+function parseTokenExpiry(value: any, fallbackMs: number) {
+  const n = Number(value);
+  if (Number.isFinite(n) && n > 0) return Date.now() + n * 1000;
+  return Date.now() + fallbackMs;
+}
+
+async function refreshMelhorEnvioToken(
+  storeId: string,
+  integration: MelhorEnvioIntegration
+) {
+  const refreshToken = String(integration.refreshToken || '').trim();
+  if (!refreshToken) throw new Error('REFRESH_TOKEN_MISSING');
+
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    client_id: MELHOR_ENVIO_CLIENT_ID,
+    client_secret: MELHOR_ENVIO_CLIENT_SECRET.value(),
+    refresh_token: refreshToken,
+  });
+
+  const response = await fetch(`${MELHOR_ENVIO_BASE_URL}/oauth/token`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json',
+    },
+    body,
+  });
+
+  const payload: any = await response.json().catch(() => ({}));
+
+  if (!response.ok || !payload.access_token) {
+    console.error('melhorEnvioRefreshToken', {
+      storeId,
+      status: response.status,
+      payload,
+    });
+    throw new Error('REFRESH_TOKEN_INVALID');
+  }
+
+  const updated: MelhorEnvioIntegration = {
+    ...integration,
+    accessToken: String(payload.access_token),
+    refreshToken: String(payload.refresh_token || refreshToken),
+    expiresAt: Timestamp.fromMillis(
+      parseTokenExpiry(payload.expires_in, 30 * 24 * 60 * 60 * 1000)
+    ),
+    refreshExpiresAt: Timestamp.fromMillis(
+      parseTokenExpiry(
+        payload.refresh_token_expires_in,
+        45 * 24 * 60 * 60 * 1000
+      )
+    ),
+    updatedAt: Timestamp.now(),
+  };
+
+  await melhorEnvioIntegrationRef(storeId).set(updated, { merge: true });
+  return updated;
+}
+
+async function getValidMelhorEnvioIntegration(storeId: string) {
+  const snap = await melhorEnvioIntegrationRef(storeId).get();
+  if (!snap.exists) throw new Error('MELHOR_ENVIO_NOT_CONNECTED');
+
+  let integration = snap.data() as MelhorEnvioIntegration;
+  const expiresAt = timestampMillis(integration.expiresAt);
+  const refreshExpiresAt = timestampMillis(integration.refreshExpiresAt);
+  const now = Date.now();
+
+  if (refreshExpiresAt && refreshExpiresAt <= now) {
+    throw new Error('REFRESH_TOKEN_EXPIRED');
+  }
+
+  if (
+    !integration.accessToken ||
+    !expiresAt ||
+    expiresAt <= now + 5 * 60 * 1000
+  ) {
+    integration = await refreshMelhorEnvioToken(storeId, integration);
+  }
+
+  return integration;
+}
+
+export const startMelhorEnvioAuthorization = onCall(
+  {
+    region: 'us-central1',
+    secrets: [MELHOR_ENVIO_CLIENT_SECRET],
+  },
+  async request => {
+    const storeId = String(request.data?.storeId || '').trim();
+
+    if (!storeId) {
+      throw new HttpsError('invalid-argument', 'Loja não informada.');
+    }
+
+    await requireStorePermission(request, storeId, 'store_settings');
+
+    const { randomBytes } = await import('node:crypto');
+    const state = randomBytes(32).toString('hex');
+
+    await db.doc(`melhorEnvioOauthStates/${state}`).set({
+      storeId,
+      userId: request.auth!.uid,
+      createdAt: Timestamp.now(),
+      expiresAt: Timestamp.fromMillis(Date.now() + 10 * 60 * 1000),
+    });
+
+    const params = new URLSearchParams({
+      client_id: MELHOR_ENVIO_CLIENT_ID,
+      redirect_uri: MELHOR_ENVIO_CALLBACK_URL,
+      response_type: 'code',
+      state,
+      scope: 'shipping-calculate',
+    });
+
+    return {
+      url: `${MELHOR_ENVIO_BASE_URL}/oauth/authorize?${params.toString()}`,
+    };
+  }
+);
+
+export const melhorEnvioOauthCallback = onRequest(
+  {
+    region: 'southamerica-east1',
+    secrets: [MELHOR_ENVIO_CLIENT_SECRET],
+  },
+  async (req, res) => {
+    const code = String(req.query.code || '').trim();
+    const state = String(req.query.state || '').trim();
+    const oauthError = String(req.query.error || '').trim();
+
+    if (oauthError) {
+      res.redirect(
+        302,
+        `${VITRIO_MELHOR_ENVIO_RETURN_URL}?melhorEnvio=error&reason=${encodeURIComponent(
+          oauthError
+        )}`
+      );
+      return;
+    }
+
+    if (!code || !state) {
+      res
+        .status(400)
+        .send('Autorização do Melhor Envio inválida: code/state ausente.');
+      return;
+    }
+
+    const stateRef = db.doc(`melhorEnvioOauthStates/${state}`);
+    const stateSnap = await stateRef.get();
+
+    if (!stateSnap.exists) {
+      res.status(400).send('Autorização expirada ou inválida.');
+      return;
+    }
+
+    const stateData = stateSnap.data() || {};
+    const expiresAt = timestampMillis(stateData.expiresAt);
+
+    if (
+      !stateData.storeId ||
+      !stateData.userId ||
+      !expiresAt ||
+      expiresAt <= Date.now()
+    ) {
+      await stateRef.delete().catch(() => {});
+      res
+        .status(400)
+        .send(
+          'A sessão de autorização expirou. Volte ao Vitrio e tente novamente.'
+        );
+      return;
+    }
+
+    try {
+      const body = new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: MELHOR_ENVIO_CLIENT_ID,
+        client_secret: MELHOR_ENVIO_CLIENT_SECRET.value(),
+        redirect_uri: MELHOR_ENVIO_CALLBACK_URL,
+        code,
+      });
+
+      const tokenResponse = await fetch(
+        `${MELHOR_ENVIO_BASE_URL}/oauth/token`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Accept: 'application/json',
+          },
+          body,
+        }
+      );
+
+      const payload: any = await tokenResponse.json().catch(() => ({}));
+
+      if (
+        !tokenResponse.ok ||
+        !payload.access_token ||
+        !payload.refresh_token
+      ) {
+        console.error('melhorEnvioOauthCallback token', {
+          status: tokenResponse.status,
+          payload,
+          storeId: stateData.storeId,
+        });
+        throw new Error('TOKEN_EXCHANGE_FAILED');
+      }
+
+      await melhorEnvioIntegrationRef(String(stateData.storeId)).set({
+        accessToken: String(payload.access_token),
+        refreshToken: String(payload.refresh_token),
+        expiresAt: Timestamp.fromMillis(
+          parseTokenExpiry(payload.expires_in, 30 * 24 * 60 * 60 * 1000)
+        ),
+        refreshExpiresAt: Timestamp.fromMillis(
+          parseTokenExpiry(
+            payload.refresh_token_expires_in,
+            45 * 24 * 60 * 60 * 1000
+          )
+        ),
+        melhorEnvioUserId: payload.user?.id ? String(payload.user.id) : '',
+        connectedAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+      });
+
+      await db.doc(`stores/${stateData.storeId}`).set(
+        {
+          melhorEnvioConnected: true,
+          melhorEnvioEnvironment: 'production',
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      await stateRef.delete().catch(() => {});
+
+      res.redirect(
+        302,
+        `${VITRIO_MELHOR_ENVIO_RETURN_URL}?melhorEnvio=connected`
+      );
+    } catch (error) {
+      console.error('melhorEnvioOauthCallback', error);
+      await stateRef.delete().catch(() => {});
+      res.redirect(
+        302,
+        `${VITRIO_MELHOR_ENVIO_RETURN_URL}?melhorEnvio=error&reason=token_exchange_failed`
+      );
+    }
+  }
+);
+
+export const getMelhorEnvioStatus = onCall(
+  {
+    region: 'us-central1',
+    secrets: [MELHOR_ENVIO_CLIENT_SECRET],
+  },
+  async request => {
+    const storeId = String(request.data?.storeId || '').trim();
+
+    if (!storeId) {
+      throw new HttpsError('invalid-argument', 'Loja não informada.');
+    }
+
+    await requireStorePermission(request, storeId, 'store_settings');
+
+    const snap = await melhorEnvioIntegrationRef(storeId).get();
+
+    if (!snap.exists) {
+      return { connected: false, environment: 'production' };
+    }
+
+    try {
+      const integration = await getValidMelhorEnvioIntegration(storeId);
+
+      return {
+        connected: true,
+        environment: 'production',
+        expiresAt: timestampMillis(integration.expiresAt),
+        refreshExpiresAt: timestampMillis(integration.refreshExpiresAt),
+      };
+    } catch (error) {
+      const code = String((error as Error)?.message || '');
+
+      if (
+        code === 'REFRESH_TOKEN_EXPIRED' ||
+        code === 'REFRESH_TOKEN_INVALID'
+      ) {
+        await db.doc(`stores/${storeId}`).set(
+          {
+            melhorEnvioConnected: false,
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        return {
+          connected: false,
+          environment: 'production',
+          needsAuthorization: true,
+        };
+      }
+
+      throw new HttpsError(
+        'internal',
+        'Não foi possível verificar a conexão com o Melhor Envio.'
+      );
+    }
   }
 );

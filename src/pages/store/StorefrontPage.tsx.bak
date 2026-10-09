@@ -247,44 +247,10 @@ export function StorefrontPage(){ const {confirm:confirmAction}=useUi();
      setOpen(true);
      return;
    }
-   if(delivery==='delivery'&&!customer.address.trim()){
-     setError('Informe o endereço de entrega.');
+   if((delivery==='delivery'||delivery==='shipping')&&!customer.address.trim()){
+     setError(delivery==='shipping'?'Informe o endereço de destino.':'Informe o endereço de entrega.');
      setOpen(true);
      return;
-   }
-
-   if(delivery==='shipping'){
-     const cep=destinationCep.replace(/\D/g,'');
-     if(cep.length!==8){
-       setError('Informe um CEP de destino válido.');
-       setOpen(true);
-       return;
-     }
-     if(!shippingAddress.street.trim()){
-       setError('Informe a rua ou avenida de destino.');
-       setOpen(true);
-       return;
-     }
-     if(!shippingAddress.number.trim()){
-       setError('Informe o número do endereço.');
-       setOpen(true);
-       return;
-     }
-     if(!shippingAddress.neighborhood.trim()){
-       setError('Informe o bairro de destino.');
-       setOpen(true);
-       return;
-     }
-     if(!shippingAddress.city.trim()){
-       setError('Informe a cidade de destino.');
-       setOpen(true);
-       return;
-     }
-     if(shippingAddress.state.trim().length!==2){
-       setError('Informe a sigla do estado com duas letras.');
-       setOpen(true);
-       return;
-     }
    }
    if(delivery==='delivery'&&!useDefaultDeliveryFee&&zones.length>0&&!deliveryZoneId){
      setError('Selecione o bairro / região da entrega.');
@@ -425,29 +391,9 @@ export function StorefrontPage(){ const {confirm:confirmAction}=useUi();
      return;
    }
 
-   if(delivery==='delivery'&&!customer.address.trim()){
-     setError('Informe o endereço de entrega.');
+   if((delivery==='delivery'||delivery==='shipping')&&!customer.address.trim()){
+     setError(delivery==='shipping'?'Informe o endereço de destino.':'Informe o endereço de entrega.');
      return;
-   }
-
-   if(delivery==='shipping'){
-     const cep = destinationCep.replace(/\D/g,'');
-     if(cep.length !== 8){
-       setError('Informe um CEP de destino válido.');
-       return;
-     }
-     if(!shippingAddress.street.trim() ||
-        !shippingAddress.number.trim() ||
-        !shippingAddress.neighborhood.trim() ||
-        !shippingAddress.city.trim() ||
-        shippingAddress.state.trim().length !== 2){
-       setError('Preencha rua, número, bairro, cidade e estado no endereço de destino.');
-       return;
-     }
-     if(!shippingServiceId){
-       setError('Calcule e selecione uma opção de envio antes de continuar.');
-       return;
-     }
    }
 
    if(delivery==='delivery'&&!useDefaultDeliveryFee&&zones.length>0&&!deliveryZoneId){
@@ -669,7 +615,6 @@ export function StorefrontPage(){ const {confirm:confirmAction}=useUi();
  <div className="catalog-grid">{visible.map(p=><article className="catalog-card" key={p.id}><button className={`favorite-button ${favorites.includes(p.id)?'active':''}`} onClick={()=>toggleFavorite(p.id)} aria-label="Favoritar produto"><Heart size={18} fill={favorites.includes(p.id)?'currentColor':'none'}/></button>{firstImage(p)?<button className="product-image-button" onClick={()=>{setGalleryIndex(0);setSelectedVariant(null);setSelectedAddons({});setSelectedProduct(p)}}><img src={firstImage(p)} alt={p.name}/></button>:<button className="product-image-button" onClick={()=>{setGalleryIndex(0);setSelectedVariant(null);setSelectedAddons({});setSelectedProduct(p)}}><div className="catalog-placeholder">V</div></button>}<div className="catalog-body"><div className="storefront-flags">{p.featured&&<span className="featured-chip"><Star size={12}/>Destaque</span>}{isFlashOfferActive(p)&&<span className="offer-chip">Oferta relâmpago</span>}</div><button className="product-title-button" onClick={()=>{setGalleryIndex(0);setSelectedVariant(null);setSelectedAddons({});setSelectedProduct(p)}}><h3>{p.name}</h3></button><p>{p.description}</p><div className="store-price">{effectiveCompareAtPrice(p)>0?<del>{money(effectiveCompareAtPrice(p))}</del>:null}<strong>{money(effectiveSalePrice(p))}</strong></div><div className="price-row"><small>{store.showStock===false?(p.stock>0?'Disponível':'Esgotado'):(p.stock>0?`${p.stock} disponível(is)`:'Esgotado')}</small><button onClick={()=>add(p)} disabled={p.stock<=0}>{p.stock>0?'Adicionar':'Esgotado'}</button></div></div></article>)}{visible.length===0&&<div className="catalog-empty"><Search/><h3>Nenhum produto encontrado</h3><p>Tente outro termo ou escolha uma categoria diferente.</p><button type="button" onClick={clearCatalogFilters}>Limpar filtros</button></div>}</div></main>
 
  {selectedProduct&&<div className="product-modal-backdrop" onMouseDown={()=>setSelectedProduct(null)}><div className="product-modal" onMouseDown={e=>e.stopPropagation()}><button className="product-modal-close" onClick={()=>setSelectedProduct(null)}><X size={19}/></button>{selectedMedia.length>0?<div className="product-gallery">{activeMedia?.type==='video'?<video className="product-gallery-video" src={activeMedia.url} controls playsInline preload="metadata"/>:<img src={activeMedia?.url||firstImage(selectedProduct)} alt={selectedProduct.name}/>} {selectedMedia.length>1&&<div className="gallery-thumbs">{selectedMedia.map((media,i)=><button type="button" key={`${media.type}-${media.url}`} className={i===galleryIndex?'active':''} onClick={()=>setGalleryIndex(i)}>{media.type==='video'?<video src={media.url} muted playsInline preload="metadata"/>:<img src={media.url} alt=""/>}{media.type==='video'&&<span className="gallery-video-badge">▶</span>}</button>)}</div>}</div>:<div className="product-modal-placeholder">V</div>}<div className="product-modal-content">{isFlashOfferActive(selectedProduct)&&<span className="offer-chip">Oferta relâmpago</span>}<div className="product-modal-title"><h2>{selectedProduct.name}</h2><div className="product-modal-actions"><button className="favorite-button inline" onClick={()=>shareProduct(selectedProduct)} title="Compartilhar produto"><Share2 size={19}/></button><button className={`favorite-button inline ${favorites.includes(selectedProduct.id)?'active':''}`} onClick={()=>toggleFavorite(selectedProduct.id)}><Heart size={19} fill={favorites.includes(selectedProduct.id)?'currentColor':'none'}/></button></div></div>{selectedProduct.sku&&<small>SKU {selectedProduct.sku}</small>}<p>{selectedProduct.description||'Produto disponível para compra.'}</p><div className="store-price large">{effectiveCompareAtPrice(selectedProduct)>0?<del>{money(effectiveCompareAtPrice(selectedProduct))}</del>:null}<strong>{money(effectiveSalePrice(selectedProduct))}</strong></div>{isFlashOfferActive(selectedProduct)&&<span className="flash-countdown modal-flash-countdown"><Clock3 size={14}/>Termina em {formatFlashRemaining(selectedProduct)}</span>}<small>{store.showStock===false?(productStock(selectedProduct)>0?'Disponível':'Esgotado'):(productStock(selectedProduct)>0?`${productStock(selectedProduct)} unidade(s) disponível(is)`:'Produto esgotado')}</small>{(selectedProduct.tags||[]).length>0&&<div className="mini-tags">{selectedProduct.tags!.map(t=><span key={t}>{t}</span>)}</div>}{selectedProduct.maxPerOrder&&selectedProduct.maxPerOrder>0?<small className="product-limit-note">Limite de {selectedProduct.maxPerOrder} unidade(s) por pedido</small>:null}<div className="product-fulfillment-picker"><strong>Como deseja receber?</strong><div className="fulfillment-choice-row">{store.allowPickup!==false&&selectedProduct.availableForPickup!==false&&<button type="button" className={delivery==='pickup'?'active':''} onClick={()=>{setDelivery('pickup');setDeliveryZoneId('');setShippingServiceId('');setQuote(null)}}><span>Retirada</span><small>Retirar na loja</small></button>}{store.allowDelivery!==false&&selectedProduct.availableForDelivery!==false&&<button type="button" className={delivery==='delivery'?'active':''} onClick={()=>{setDelivery('delivery');setShippingServiceId('');setQuote(null)}}><span>Entrega</span><small>Receber no endereço</small></button>}</div></div>{(selectedProduct.variants||[]).filter(v=>v.active!==false).length>0&&<div className="variant-picker"><strong>Escolha uma variação</strong><div className="variant-options">{selectedProduct.variants!.filter(v=>v.active!==false).map(v=><button key={v.id} type="button" disabled={v.stock<=0} className={selectedVariant?.id===v.id?'active':''} onClick={()=>setSelectedVariant(v)}><span>{v.name}</span><small>{v.stock>0?`${v.stock} disponível(is)`:'Esgotado'}{Number(v.priceAdjustment||0)!==0?` · ${Number(v.priceAdjustment)>0?'+':''}${money(Number(v.priceAdjustment))}`:''}</small></button>)}</div></div>}{(selectedProduct.addonGroups||[]).length>0&&<div className="addon-picker"><strong>Personalize seu produto</strong>{selectedProduct.addonGroups!.map(group=>{const chosen=selectedAddons[group.id]||[];const max=Math.max(1,Number(group.maxSelections||1));return <div className="addon-group" key={group.id}><div className="addon-group-title"><span>{group.name}</span><small>{group.required?'Obrigatório':'Opcional'} · {max===1?'escolha 1':`até ${max}`}</small></div><div className="addon-options">{(group.options||[]).filter(o=>o.active!==false).map(option=>{const active=chosen.includes(option.id);return <button type="button" key={option.id} className={active?'active':''} onClick={()=>setSelectedAddons(current=>{const prev=current[group.id]||[];let next:string[];if(max===1)next=active?[]:[option.id];else next=active?prev.filter(id=>id!==option.id):(prev.length<max?[...prev,option.id]:prev);return {...current,[group.id]:next}})}><span>{option.name}</span><small>{Number(option.price||0)>0?`+ ${money(Number(option.price))}`:'Sem acréscimo'}</small></button>})}</div></div>})}</div>}<div className="product-modal-cart-action"><button type="button" className="product-modal-add-button" onClick={()=>add(selectedProduct,selectedVariant)} disabled={(selectedProduct.variants||[]).filter(v=>v.active!==false).length>0?!selectedVariant||selectedVariant.stock<=0:selectedProduct.stock<=0}><ShoppingBag size={19}/><span>{(selectedProduct.variants||[]).filter(v=>v.active!==false).length>0&&!selectedVariant?'Selecione o tamanho':((selectedVariant?selectedVariant.stock:selectedProduct.stock)>0?'Adicionar ao carrinho':'Produto esgotado')}</span></button><small>Depois você poderá revisar o carrinho e finalizar o pedido.</small></div>{products.filter(x=>x.id!==selectedProduct.id&&x.categoryId&&x.categoryId===selectedProduct.categoryId&&productStock(x)>0).slice(0,3).length>0&&<div className="related-products"><strong>Você também pode gostar</strong>{products.filter(x=>x.id!==selectedProduct.id&&x.categoryId&&x.categoryId===selectedProduct.categoryId&&productStock(x)>0).slice(0,3).map(x=><button key={x.id} onClick={()=>{setSelectedProduct(x);setGalleryIndex(0);setSelectedVariant(null);setSelectedAddons({})}}><span>{x.name}</span><b>{money(effectiveSalePrice(x))}</b></button>)}</div>}</div></div></div>}
-
 
  {open&&<div className="drawer-backdrop" onMouseDown={()=>setOpen(false)}><aside className="drawer" onMouseDown={e=>e.stopPropagation()}>
    <div className="drawer-head"><div><h2>Seu carrinho</h2><small>{cart.reduce((s,i)=>s+i.quantity,0)} item(ns)</small></div><div className="drawer-head-actions">{cart.length>0&&<button className="clear-cart" onClick={async()=>{const ok=await confirmAction({title:'Limpar carrinho',message:'Remover todos os itens do carrinho?',confirmLabel:'Limpar carrinho',danger:true});if(ok)setCart([])}}>Limpar</button>}<button onClick={()=>setOpen(false)}><X/></button></div></div>

@@ -276,8 +276,10 @@ export function OrderTrackingPage(){
               <span>
                 <Store size={17}/>
                 {data.fulfillment==='delivery'
-                  ? 'Entrega'
-                  : 'Retirada na loja'}
+                  ? 'Entrega local'
+                  : data.fulfillment==='shipping'
+                    ? `Envio${data.shippingServiceName ? ` · ${data.shippingServiceName}` : ''}`
+                    : 'Retirada na loja'}
               </span>
 
               {data.address&&(

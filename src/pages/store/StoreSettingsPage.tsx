@@ -1,7 +1,14 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { collection,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  updateDoc,
+  where } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
-import { db, storage } from '../../lib/firebase';
+import { db, functions, storage } from '../../lib/firebase';
+import { httpsCallable } from 'firebase/functions';
 import { useAuth } from '../../contexts/AuthContext';
 import { Store } from '../../types/models';
 
@@ -51,9 +58,94 @@ export function StoreSettingsPage() {
   const [saved, setSaved] = useState(false);
   const [minOrderValue, setMinOrderValue] = useState('');
   const [monthlySalesGoal, setMonthlySalesGoal] = useState('');
+  const [melhorEnvioConnected, setMelhorEnvioConnected] = useState(false);
+  const [melhorEnvioChecking, setMelhorEnvioChecking] = useState(true);
+  const [melhorEnvioConnecting, setMelhorEnvioConnecting] = useState(false);
+  const [melhorEnvioMessage, setMelhorEnvioMessage] = useState('');
+  const [shippingProductsMissing, setShippingProductsMissing] = useState(0);
 
   useEffect(() => {
     if (!profile?.storeId) return;
+
+    const storeId = profile.storeId;
+        async function loadMelhorEnvio() {
+      setMelhorEnvioChecking(true);
+
+      try {
+        const statusFn = httpsCallable(
+          functions,
+          'getMelhorEnvioStatus'
+        );
+
+        const result: any = await statusFn({
+          storeId: storeId
+        });
+
+        setMelhorEnvioConnected(result.data?.connected === true);
+
+        if (result.data?.connected === true) {
+          setStore(current => ({
+            ...current,
+            melhorEnvioConnected: true,
+            melhorEnvioEnvironment: 'production'
+          }));
+        }
+      } catch (error) {
+        console.error('Erro ao verificar Melhor Envio:', error);
+        setMelhorEnvioConnected(false);
+      } finally {
+        setMelhorEnvioChecking(false);
+      }
+    }
+
+    async function loadShippingProducts() {
+      try {
+        const snap = await getDocs(
+          query(
+            collection(db, 'products'),
+            where('storeId', '==', storeId)
+          )
+        );
+
+        let missing = 0;
+
+        snap.forEach(productDoc => {
+          const product: any = productDoc.data();
+
+          // Contar apenas produtos ativos e explicitamente disponíveis
+          // para envio pelo Melhor Envio.
+          if (product.active === false) return;
+          if (product.availableForShipping !== true) return;
+
+          // Considerar somente os campos usados pelo cálculo de frete.
+          const weight = Number(product.shippingWeightGrams ?? 0);
+          const width = Number(product.shippingWidthCm ?? 0);
+          const height = Number(product.shippingHeightCm ?? 0);
+          const length = Number(product.shippingLengthCm ?? 0);
+
+          const hasCompleteShippingData =
+            Number.isFinite(weight) && weight > 0 &&
+            Number.isFinite(width) && width > 0 &&
+            Number.isFinite(height) && height > 0 &&
+            Number.isFinite(length) && length > 0;
+
+          if (!hasCompleteShippingData) {
+            missing++;
+          }
+        });
+
+        setShippingProductsMissing(missing);
+      } catch (error) {
+        console.error(
+          'Erro ao verificar dados de envio dos produtos:',
+          error
+        );
+      }
+    }
+
+    loadMelhorEnvio();
+    loadShippingProducts();
+
 
     getDoc(doc(db, 'stores', profile.storeId)).then(s => {
       if (!s.exists()) return;
@@ -78,6 +170,7 @@ export function StoreSettingsPage() {
       );
     });
   }, [profile?.storeId]);
+
 
   async function save(e: FormEvent) {
     e.preventDefault();
@@ -114,6 +207,7 @@ export function StoreSettingsPage() {
       whatsapp: (store.whatsapp || '').replace(/\D/g, ''),
       instagram: store.instagram || '',
       address: store.address || '',
+      shippingOriginCep: String(store.shippingOriginCep || '').replace(/\D/g, '').slice(0, 8),
       primaryColor: store.primaryColor || '#6d5dfc',
       logoUrl,
       bannerUrl,
@@ -148,6 +242,43 @@ export function StoreSettingsPage() {
 
     setSaved(true);
   }
+
+  async function connectMelhorEnvio() {
+  if (!profile?.storeId || melhorEnvioConnecting) return;
+
+  setMelhorEnvioConnecting(true);
+  setMelhorEnvioMessage('');
+
+  try {
+    const startFn = httpsCallable(
+      functions,
+      'startMelhorEnvioAuthorization'
+    );
+
+    const result: any = await startFn({
+      storeId: profile.storeId
+    });
+
+    const url = String(result.data?.url || '');
+
+    if (!url) {
+      throw new Error(
+        'Não foi possível iniciar a autorização do Melhor Envio.'
+      );
+    }
+
+    window.location.href = url;
+  } catch (error: any) {
+    console.error('Erro ao conectar Melhor Envio:', error);
+
+    setMelhorEnvioMessage(
+      error?.message?.replace('FirebaseError: ', '') ||
+        'Não foi possível iniciar a conexão com o Melhor Envio.'
+    );
+
+    setMelhorEnvioConnecting(false);
+  }
+}
 
   return (
     <>
@@ -416,6 +547,119 @@ export function StoreSettingsPage() {
 
         </form>
       </div>
+
+
+<div className="panel melhor-envio-panel">
+  <div className="melhor-envio-header">
+    <div>
+      <h2>Envio para outros locais</h2>
+
+      <p className="muted">
+        Use o Melhor Envio para calcular automaticamente
+        transportadora, modalidade, prazo e valor do frete no checkout.
+      </p>
+    </div>
+
+    {!melhorEnvioChecking && (
+      <span
+        className={
+          melhorEnvioConnected
+            ? 'melhor-envio-status connected'
+            : 'melhor-envio-status'
+        }
+      >
+        {melhorEnvioConnected
+          ? '✓ Conectado'
+          : 'Não conectado'}
+      </span>
+    )}
+  </div>
+
+  <div className="melhor-envio-content">
+
+    <div className="melhor-envio-origin">
+      <label>
+        CEP de origem dos envios
+
+        <input
+          inputMode="numeric"
+          maxLength={9}
+          value={String(store.shippingOriginCep || '')
+            .replace(/\D/g, '')
+            .replace(/(\d{5})(\d{1,3})/, '$1-$2')
+            .slice(0, 9)}
+          onChange={e =>
+            setStore({
+              ...store,
+              shippingOriginCep: e.target.value
+                .replace(/\D/g, '')
+                .slice(0, 8)
+            })
+          }
+          placeholder="Ex.: 63800-000"
+        />
+      </label>
+
+      <small>
+        É o CEP de onde os pedidos serão enviados.
+        Ele será usado nas cotações do Melhor Envio.
+      </small>
+    </div>
+
+    <div className="melhor-envio-info">
+      <strong>Antes de ativar o envio</strong>
+
+      <p>
+        Os produtos enviados precisam ter peso, largura, altura e
+        comprimento da embalagem preenchidos em Produtos.
+        Essas informações determinam a cotação do frete.
+      </p>
+
+      {shippingProductsMissing > 0 && (
+        <div className="melhor-envio-warning">
+          ⚠️ {shippingProductsMissing} produto(s) ativo(s) ainda
+          precisam dessas informações.
+        </div>
+      )}
+
+      {shippingProductsMissing === 0 && (
+        <div className="melhor-envio-success">
+          ✓ Todos os produtos disponíveis para envio possuem
+          peso e dimensões cadastrados.
+        </div>
+      )}
+    </div>
+
+    <div className="melhor-envio-footer">
+      <div>
+        <strong>Melhor Envio</strong>
+
+        <span>
+          Ambiente: Produção
+        </span>
+      </div>
+
+      <button
+        type="button"
+        className="secondary-btn"
+        onClick={connectMelhorEnvio}
+        disabled={melhorEnvioConnecting}
+      >
+        {melhorEnvioConnecting
+          ? 'Conectando...'
+          : melhorEnvioConnected
+            ? 'Reconectar Melhor Envio'
+            : 'Vincular Melhor Envio'}
+      </button>
+    </div>
+
+    {melhorEnvioMessage && (
+      <div className="error-text">
+        {melhorEnvioMessage}
+      </div>
+    )}
+  </div>
+</div>
     </>
   );
 }

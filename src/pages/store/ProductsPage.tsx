@@ -127,6 +127,11 @@ const blank = {
   flashEnd: '',
   availableForPickup: true,
   availableForDelivery: true,
+  availableForShipping: true,
+  shippingWeightGrams: '',
+  shippingWidthCm: '',
+  shippingHeightCm: '',
+  shippingLengthCm: '',
   maxPerOrder: '',
   variantsText: '',
   addonsText: ''
@@ -371,6 +376,11 @@ export function ProductsPage() {
 
         availableForPickup: form.availableForPickup,
         availableForDelivery: form.availableForDelivery,
+        availableForShipping: form.availableForShipping,
+        shippingWeightGrams: parseMoney(form.shippingWeightGrams),
+        shippingWidthCm: parseMoney(form.shippingWidthCm),
+        shippingHeightCm: parseMoney(form.shippingHeightCm),
+        shippingLengthCm: parseMoney(form.shippingLengthCm),
 
         maxPerOrder: form.maxPerOrder
           ? Number(form.maxPerOrder)
@@ -615,6 +625,12 @@ export function ProductsPage() {
 
       availableForDelivery:
         editing.availableForDelivery !== false,
+      availableForShipping:
+        editing.availableForShipping !== false,
+      shippingWeightGrams: parseMoney((editing as any).shippingWeightGrams),
+      shippingWidthCm: parseMoney((editing as any).shippingWidthCm),
+      shippingHeightCm: parseMoney((editing as any).shippingHeightCm),
+      shippingLengthCm: parseMoney((editing as any).shippingLengthCm),
 
       maxPerOrder:
         Number(editing.maxPerOrder || 0),
@@ -1680,7 +1696,29 @@ export function ProductsPage() {
 
               Disponível para entrega
             </label>
+
+            <label className="check-line">
+              <input
+                type="checkbox"
+                checked={form.availableForShipping}
+                onChange={e => setForm({ ...form, availableForShipping: e.target.checked })}
+              />
+              Disponível para envio
+            </label>
           </div>
+
+          {form.availableForShipping && (
+            <div className="shipping-data-block">
+              <strong>Dados para cálculo do envio</strong>
+              <small>Informe peso e dimensões da embalagem para calcular o frete pelo Melhor Envio.</small>
+              <div className="shipping-data-grid">
+                <label>Peso (g)<input inputMode="decimal" value={form.shippingWeightGrams} onChange={e => setForm({ ...form, shippingWeightGrams: e.target.value })} placeholder="Ex.: 500" /></label>
+                <label>Largura (cm)<input inputMode="decimal" value={form.shippingWidthCm} onChange={e => setForm({ ...form, shippingWidthCm: e.target.value })} placeholder="Ex.: 20" /></label>
+                <label>Altura (cm)<input inputMode="decimal" value={form.shippingHeightCm} onChange={e => setForm({ ...form, shippingHeightCm: e.target.value })} placeholder="Ex.: 10" /></label>
+                <label>Comprimento (cm)<input inputMode="decimal" value={form.shippingLengthCm} onChange={e => setForm({ ...form, shippingLengthCm: e.target.value })} placeholder="Ex.: 30" /></label>
+              </div>
+            </div>
+          )}
 
           <label className="span-2">
             Descrição
@@ -2857,7 +2895,29 @@ export function ProductsPage() {
 
                   Disponível para entrega
                 </label>
+
+                <label className="check-line">
+                  <input
+                    type="checkbox"
+                    checked={editing.availableForShipping !== false}
+                    onChange={e => setEditing({ ...editing, availableForShipping: e.target.checked })}
+                  />
+                  Disponível para envio
+                </label>
               </div>
+
+              {editing.availableForShipping !== false && (
+                <div className="shipping-data-block">
+                  <strong>Dados para cálculo do envio</strong>
+                  <small>Informe peso e dimensões da embalagem para calcular o frete pelo Melhor Envio.</small>
+                  <div className="shipping-data-grid">
+                    <label>Peso (g)<input inputMode="decimal" value={String(editing.shippingWeightGrams ?? '')} onChange={e => setEditing({ ...editing, shippingWeightGrams: parseMoney(e.target.value) })} placeholder="Ex.: 500" /></label>
+                    <label>Largura (cm)<input inputMode="decimal" value={String(editing.shippingWidthCm ?? '')} onChange={e => setEditing({ ...editing, shippingWidthCm: parseMoney(e.target.value) })} placeholder="Ex.: 20" /></label>
+                    <label>Altura (cm)<input inputMode="decimal" value={String(editing.shippingHeightCm ?? '')} onChange={e => setEditing({ ...editing, shippingHeightCm: parseMoney(e.target.value) })} placeholder="Ex.: 10" /></label>
+                    <label>Comprimento (cm)<input inputMode="decimal" value={String(editing.shippingLengthCm ?? '')} onChange={e => setEditing({ ...editing, shippingLengthCm: parseMoney(e.target.value) })} placeholder="Ex.: 30" /></label>
+                  </div>
+                </div>
+              )}
 
               <label className="span-2">
                 Descrição

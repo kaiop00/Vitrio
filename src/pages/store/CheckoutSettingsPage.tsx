@@ -1,12 +1,14 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, query, updateDoc, where } from 'firebase/firestore';
 import {
   CheckCircle2,
   CreditCard,
   MessageCircle,
   Shuffle,
+  PackageCheck,
 } from 'lucide-react';
-import { db } from '../../lib/firebase';
+import { db, functions } from '../../lib/firebase';
+import { httpsCallable } from 'firebase/functions';
 import { useAuth } from '../../contexts/AuthContext';
 import { Store } from '../../types/models';
 
@@ -16,17 +18,15 @@ export function CheckoutSettingsPage() {
   const { profile } = useAuth();
 
   const [store, setStore] = useState<Partial<Store>>({
-    checkoutMode: 'whatsapp',
-    allowPix: true,
-    allowCard: true,
-    allowCash: true,
-    allowPickup: true,
-    allowDelivery: true,
-    deliveryFee: 0,
+    checkoutMode: 'whatsapp', allowPix: true, allowCard: true, allowCash: true, allowPickup: true, allowDelivery: true
   });
 
-  const [deliveryFee, setDeliveryFee] = useState('0');
-  const [deliveryFeeMode, setDeliveryFeeMode] = useState<'zones'|'default'>('zones');
+  const [melhorEnvioConnected, setMelhorEnvioConnected] = useState(false);
+  const [melhorEnvioLoading, setMelhorEnvioLoading] = useState(false);
+  const [melhorEnvioMessage, setMelhorEnvioMessage] = useState('');
+  const [shippingOriginCep, setShippingOriginCep] = useState('');
+  const [shippingIncompleteCount, setShippingIncompleteCount] = useState(0);
+  const [shippingIncompleteNames, setShippingIncompleteNames] = useState<string[]>([]);
   const [saved, setSaved] = useState(false);
   const [message, setMessage] = useState('');
 
@@ -46,10 +46,47 @@ export function CheckoutSettingsPage() {
         ...data,
       }));
 
-      setDeliveryFee(String(data.deliveryFee ?? 0));
-      setDeliveryFeeMode(data.deliveryFeeMode === 'default' ? 'default' : 'zones');
+      setShippingOriginCep(String(data.shippingOriginCep || ''));
     });
   }, [profile?.storeId]);
+
+  useEffect(() => {
+    if (!profile?.storeId) return;
+    const params = new URLSearchParams(window.location.search);
+    const result = params.get('melhorEnvio');
+    if (result === 'connected') setMelhorEnvioMessage('Melhor Envio conectado com sucesso em produção.');
+    if (result === 'error') setMelhorEnvioMessage('Não foi possível concluir a autorização do Melhor Envio. Tente conectar novamente.');
+    if (result) window.history.replaceState({}, '', window.location.pathname);
+
+    (async () => {
+      try {
+        const statusFn = httpsCallable<{storeId:string},{connected:boolean}>(functions,'getMelhorEnvioStatus');
+        const status = await statusFn({storeId:profile.storeId!});
+        setMelhorEnvioConnected(status.data.connected === true);
+      } catch (error) { console.error('getMelhorEnvioStatus', error); }
+      try {
+        const snap = await getDocs(query(collection(db,'products'), where('storeId','==',profile.storeId), where('active','==',true)));
+        const incomplete = snap.docs.map(d => ({name:String(d.data()?.name||'Produto'), p:d.data()})).filter(x => Number(x.p.shippingWeightGrams||0)<=0 || Number(x.p.shippingWidthCm||0)<=0 || Number(x.p.shippingHeightCm||0)<=0 || Number(x.p.shippingLengthCm||0)<=0);
+        setShippingIncompleteCount(incomplete.length);
+        setShippingIncompleteNames(incomplete.slice(0,5).map(x=>x.name));
+      } catch (error) { console.error('shipping product validation', error); }
+    })();
+  }, [profile?.storeId]);
+
+  async function connectMelhorEnvio() {
+    if (!profile?.storeId) return;
+    setMelhorEnvioLoading(true); setMelhorEnvioMessage('');
+    try {
+      const fn = httpsCallable<{storeId:string},{url:string}>(functions,'startMelhorEnvioAuthorization');
+      const result = await fn({storeId:profile.storeId});
+      if (!result.data?.url) throw new Error('URL de autorização não retornada.');
+      window.location.href = result.data.url;
+    } catch (error) {
+      console.error('startMelhorEnvioAuthorization', error);
+      setMelhorEnvioMessage('Não foi possível iniciar a conexão com o Melhor Envio.');
+      setMelhorEnvioLoading(false);
+    }
+  }
 
   function selectMode(mode: CheckoutMode) {
     if (
@@ -87,11 +124,6 @@ export function CheckoutSettingsPage() {
       return;
     }
 
-    const fee =
-      deliveryFee.trim() === ''
-        ? 0
-        : Number(deliveryFee.replace(',', '.'));
-
     await updateDoc(doc(db, 'stores', profile.storeId), {
       checkoutMode: mode,
       allowPix: store.allowPix !== false,
@@ -99,8 +131,7 @@ export function CheckoutSettingsPage() {
       allowCash: store.allowCash !== false,
       allowPickup: store.allowPickup !== false,
       allowDelivery: store.allowDelivery !== false,
-      deliveryFeeMode,
-      deliveryFee: Number.isFinite(fee) ? fee : 0,
+      shippingOriginCep: shippingOriginCep.replace(/\D/g,'').slice(0,8),
     });
 
     setMessage('');
@@ -286,7 +317,7 @@ export function CheckoutSettingsPage() {
               Retirada na loja
             </label>
 
-            <label>
+            <label className="checkout-availability-option">
               <input
                 type="checkbox"
                 checked={store.allowDelivery !== false}
@@ -297,54 +328,9 @@ export function CheckoutSettingsPage() {
                   })
                 }
               />
-              Entrega
+              <span>Entrega local</span>
             </label>
 
-            {store.allowDelivery !== false && (
-              <div className="delivery-fee-mode">
-                <strong>Forma de calcular a entrega</strong>
-
-                <label>
-                  <input
-                    type="radio"
-                    name="deliveryFeeMode"
-                    checked={deliveryFeeMode === 'zones'}
-                    onChange={() => setDeliveryFeeMode('zones')}
-                  />
-                  <span>
-                    <b>Por bairros / regiões</b>
-                    <small>Usa a taxa cadastrada para cada região.</small>
-                  </span>
-                </label>
-
-                <label>
-                  <input
-                    type="radio"
-                    name="deliveryFeeMode"
-                    checked={deliveryFeeMode === 'default'}
-                    onChange={() => setDeliveryFeeMode('default')}
-                  />
-                  <span>
-                    <b>Taxa única</b>
-                    <small>Aplica o mesmo valor para todas as entregas.</small>
-                  </span>
-                </label>
-
-                {deliveryFeeMode === 'default' && (
-                  <label>
-                    Valor da entrega (R$)
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      inputMode="decimal"
-                      value={deliveryFee}
-                      onChange={(e) => setDeliveryFee(e.target.value)}
-                    />
-                  </label>
-                )}
-              </div>
-            )}
           </div>
 
           <div className="save-row">

@@ -4268,3 +4268,630 @@ button[disabled],.primary-btn[disabled],.secondary-btn[disabled]{cursor:not-allo
   }
 }
 
+
+
+.shipping-data-block{margin-top:4px;padding:16px;border:1px solid #e5e7eb;border-radius:14px;background:#fafafa}.shipping-data-block>strong{display:block;margin-bottom:4px}.shipping-data-block>small{display:block;color:#6b7280;line-height:1.45}.shipping-data-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:14px 0}.shipping-data-grid label{display:flex;flex-direction:column;gap:6px}.shipping-data-grid input{width:100%;box-sizing:border-box}@media(max-width:700px){.shipping-data-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:430px){.shipping-data-grid{grid-template-columns:1fr}}
+
+.shipping-options{display:grid;gap:8px;margin:4px 0 12px}.shipping-options button{display:flex;justify-content:space-between;align-items:center;gap:12px;text-align:left;padding:12px 14px;border:1px solid #e5e7eb;border-radius:12px;background:#fff;cursor:pointer}.shipping-options button.active{border-color:#6d5dfc;box-shadow:0 0 0 2px rgba(109,93,252,.12)}.shipping-options button span{font-weight:700}.shipping-options button small{color:#6b7280;text-align:right}
+
+
+.shipping-checkout-block{display:flex;flex-direction:column;gap:10px;padding:14px;border:1px solid #e5e7eb;border-radius:14px;background:#fff}
+.shipping-checkout-block>strong{font-size:15px}
+.shipping-checkout-block>small{color:#6b7280;line-height:1.45;margin-top:-4px}
+.shipping-address-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.shipping-address-grid label{display:flex;flex-direction:column;gap:6px}
+.shipping-address-grid label:first-child,.shipping-address-grid label:nth-child(2){grid-column:span 2}
+@media(max-width:600px){.shipping-address-grid{grid-template-columns:1fr}.shipping-address-grid label:first-child,.shipping-address-grid label:nth-child(2){grid-column:auto}}
+
+/* Entrega local */
+.delivery-local-panel{
+  overflow:hidden;
+}
+
+.delivery-local-header{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:24px;
+  margin-bottom:22px;
+}
+
+.delivery-local-header h2{
+  margin:0 0 6px;
+}
+
+.delivery-local-header .muted{
+  margin:0;
+  max-width:850px;
+  line-height:1.5;
+}
+
+.delivery-enabled-toggle{
+  flex:0 0 auto;
+  display:flex;
+  align-items:center;
+  gap:9px;
+  padding:10px 14px;
+  border:1px solid #2d3650;
+  border-radius:12px;
+  white-space:nowrap;
+}
+
+.delivery-enabled-toggle input{
+  margin:0;
+}
+
+.delivery-enabled-toggle span{
+  font-weight:700;
+}
+
+.delivery-mode-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:16px;
+  width:100%;
+  box-sizing:border-box;
+}
+
+.delivery-mode-option{
+  min-width:0;
+  box-sizing:border-box;
+  display:flex;
+  align-items:flex-start;
+  gap:12px;
+  padding:16px;
+  border:1px solid #27324a;
+  border-radius:14px;
+  cursor:pointer;
+  transition:border-color .18s ease,background .18s ease;
+}
+
+.delivery-mode-option.active{
+  border-color:#6d5dfc;
+  background:rgba(109,93,252,.06);
+}
+
+.delivery-mode-radio{
+  flex:0 0 auto;
+  padding-top:2px;
+}
+
+.delivery-mode-radio input{
+  margin:0;
+}
+
+.delivery-mode-option > div:last-child{
+  min-width:0;
+}
+
+.delivery-mode-option strong{
+  display:block;
+  line-height:1.3;
+  margin-bottom:5px;
+}
+
+.delivery-mode-option small{
+  display:block;
+  color:#8993aa;
+  line-height:1.45;
+}
+
+.delivery-single-fee{
+  margin-top:18px;
+  max-width:360px;
+}
+
+.delivery-single-fee label{
+  display:flex;
+  flex-direction:column;
+  gap:7px;
+}
+
+.delivery-config-actions{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  flex-wrap:wrap;
+  margin-top:18px;
+}
+
+@media(max-width:700px){
+  .delivery-local-header{
+    flex-direction:column;
+  }
+
+  .delivery-enabled-toggle{
+    align-self:flex-start;
+  }
+
+  .delivery-mode-grid{
+    grid-template-columns:1fr;
+  }
+}
+
+@media(max-width:430px){
+  .delivery-mode-option{
+    padding:14px;
+  }
+}
+
+/* Melhor Envio — Minha loja */
+
+.melhor-envio-panel{
+  margin-top:18px;
+  overflow:hidden;
+}
+
+.melhor-envio-header{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:24px;
+  margin-bottom:20px;
+}
+
+.melhor-envio-header h2{
+  margin:0 0 6px;
+}
+
+.melhor-envio-header .muted{
+  margin:0;
+  max-width:850px;
+  line-height:1.5;
+}
+
+.melhor-envio-status{
+  flex:0 0 auto;
+  padding:8px 12px;
+  border:1px solid #39445e;
+  border-radius:10px;
+  font-weight:700;
+  white-space:nowrap;
+}
+
+.melhor-envio-status.connected{
+  border-color:#4d9b73;
+}
+
+.melhor-envio-content{
+  display:flex;
+  flex-direction:column;
+  gap:16px;
+}
+
+.melhor-envio-origin{
+  max-width:100%;
+}
+
+.melhor-envio-origin label{
+  display:flex;
+  flex-direction:column;
+  gap:7px;
+}
+
+.melhor-envio-origin input{
+  width:100%;
+  box-sizing:border-box;
+}
+
+.melhor-envio-origin small{
+  display:block;
+  margin-top:7px;
+  color:#8993aa;
+  line-height:1.45;
+}
+
+.melhor-envio-info{
+  padding:15px 16px;
+  border-radius:12px;
+  background:rgba(255,255,255,.025);
+  border:1px solid #202b43;
+}
+
+.melhor-envio-info strong{
+  display:block;
+  margin-bottom:6px;
+}
+
+.melhor-envio-info p{
+  margin:0;
+  color:#8993aa;
+  line-height:1.5;
+}
+
+.melhor-envio-warning{
+  margin-top:10px;
+  padding:10px 12px;
+  border-radius:9px;
+  background:rgba(255,193,7,.07);
+  color:#d9c27b;
+  line-height:1.45;
+}
+
+.melhor-envio-success{
+  margin-top:10px;
+  color:#72c99a;
+}
+
+.melhor-envio-footer{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  padding-top:4px;
+}
+
+.melhor-envio-footer > div{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+}
+
+.melhor-envio-footer > div span{
+  color:#8993aa;
+  font-size:.9rem;
+}
+
+@media(max-width:700px){
+  .melhor-envio-header,
+  .melhor-envio-footer{
+    flex-direction:column;
+    align-items:stretch;
+  }
+
+  .melhor-envio-status{
+    align-self:flex-start;
+  }
+
+  .melhor-envio-footer .secondary-btn{
+    width:100%;
+  }
+}
+
+/* Dados de envio no cadastro/edição de produto — layout responsivo */
+.shipping-data-block {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  margin-top: 12px;
+  padding: 16px;
+  border: 1px solid var(--viz-border, #293750);
+  border-radius: 12px;
+  background: var(--viz-card, #101c30);
+  color: var(--viz-text, #e7edf8);
+}
+
+.shipping-data-block > strong {
+  display: block;
+  margin-bottom: 6px;
+  color: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.shipping-data-block > small {
+  display: block;
+  color: var(--viz-muted, #9aa8bf);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.shipping-data-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  margin: 14px 0 0;
+}
+
+.shipping-data-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+  color: var(--viz-muted, #b4bfd2);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.shipping-data-grid input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 42px;
+  box-sizing: border-box;
+  padding: 10px;
+  border: 1px solid var(--viz-border, #34445f);
+  border-radius: 9px;
+  background: var(--viz-panel, #0b1628);
+  color: var(--viz-text, #e7edf8);
+  font-size: 14px;
+}
+
+.shipping-data-grid input:focus {
+  outline: 2px solid var(--viz-accent, #7c6cff);
+  outline-offset: 1px;
+}
+
+@media (max-width: 430px) {
+  .shipping-data-block {
+    padding: 12px;
+  }
+
+  .shipping-data-grid {
+    gap: 10px;
+  }
+}
+
+
+/* Opções de disponibilidade na finalização da compra */
+.checkout-availability-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 9px;
+  min-height: 24px;
+  margin: 0;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.checkout-availability-option input[type="checkbox"] {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.checkout-availability-option span {
+  display: inline-block;
+  margin: 0;
+}
+
+/* Corrige o alinhamento da opção Entrega local */
+.toggle-grid label.checkout-availability-option:last-child {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 9px !important;
+  min-height: 24px;
+  margin: 0;
+  line-height: 1.4;
+  text-align: left;
+}
+
+.toggle-grid label.checkout-availability-option:last-child input[type="checkbox"] {
+  display: block;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  accent-color: #776cff;
+}
+
+.toggle-grid label.checkout-availability-option:last-child span {
+  display: inline-block;
+  margin: 0;
+  padding: 0;
+  line-height: 1.4;
+}
+
+/* Mantém o checkbox Entrega local no mesmo tamanho dos demais */
+.toggle-grid label.checkout-availability-option:last-child input[type="checkbox"] {
+  appearance: auto !important;
+  -webkit-appearance: checkbox !important;
+  width: 13px !important;
+  height: 13px !important;
+  flex: 0 0 13px !important;
+  padding: 0 !important;
+  margin: 0 0 0 3px !important;
+  box-shadow: none !important;
+}
+
+.toggle-grid label.checkout-availability-option:last-child {
+  gap: 9px !important;
+  min-height: 20px !important;
+}
+
+
+/* Informações de envio no card do pedido */
+.order-shipping-details {
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid #34415b;
+  border-radius: 14px;
+  background: #0a1424;
+  min-width: 0;
+}
+
+.order-shipping-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.order-shipping-heading > svg {
+  flex-shrink: 0;
+  color: #a49aff;
+}
+
+.order-shipping-heading strong,
+.order-shipping-heading small {
+  display: block;
+}
+
+.order-shipping-heading small {
+  margin-top: 3px;
+  color: #8f9db9;
+  line-height: 1.4;
+}
+
+.order-shipping-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.order-shipping-grid > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.order-shipping-grid small,
+.order-shipping-grid strong {
+  display: block;
+}
+
+.order-shipping-grid small {
+  color: #8f9db9;
+  margin-bottom: 5px;
+}
+
+.order-shipping-grid strong {
+  color: #edf2ff;
+  line-height: 1.45;
+}
+
+.order-shipping-note {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #26344c;
+  color: #cbd6eb;
+  overflow-wrap: anywhere;
+}
+
+.order-shipping-note p {
+  margin-bottom: 0;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 600px) {
+  .order-shipping-details {
+    padding: 13px;
+  }
+
+  .order-shipping-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+}
+
+/* Vitrio — destaque dos dados de envio no checkout */
+.storefront .shipping-checkout-block {
+  background: linear-gradient(145deg, #f3f0ff 0%, #ffffff 78%);
+  border: 1px solid #c4b5fd;
+  border-radius: 16px;
+  padding: 16px;
+  gap: 12px;
+  box-shadow: 0 3px 12px rgba(109, 93, 252, 0.08);
+}
+
+.storefront .shipping-checkout-block > strong {
+  display: block;
+  color: #4338a8;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.storefront .shipping-checkout-block > small {
+  color: #625b85;
+  line-height: 1.5;
+}
+
+.storefront .shipping-address-grid label {
+  color: #514783;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 6px;
+}
+
+.storefront .shipping-checkout-block input {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 44px;
+  border: 1px solid #d5cef7;
+  border-radius: 10px;
+  background: #fff;
+  color: #172033;
+}
+
+.storefront .shipping-checkout-block input:focus {
+  outline: none;
+  border-color: #6d5dfc;
+  box-shadow: 0 0 0 3px rgba(109, 93, 252, 0.15);
+}
+
+.storefront .shipping-checkout-block > button.secondary-btn {
+  width: 100%;
+  min-height: 46px;
+  border-color: #5546df;
+  background: #5546df;
+  color: #fff;
+}
+
+.storefront .shipping-options {
+  gap: 9px;
+  margin: 0;
+}
+
+.storefront .shipping-options button {
+  min-width: 0;
+  background: #fff;
+  border: 1px solid #d5cef7;
+  border-radius: 12px;
+  padding: 13px;
+}
+
+.storefront .shipping-options button.active {
+  background: #eeebff;
+  border: 2px solid #6d5dfc;
+  box-shadow: 0 0 0 2px rgba(109, 93, 252, 0.10);
+}
+
+.storefront .shipping-options button span {
+  color: #30266f;
+  overflow-wrap: anywhere;
+}
+
+.storefront .shipping-options button small {
+  color: #514783;
+  flex-shrink: 0;
+}
+
+@media (max-width: 430px) {
+  .storefront .shipping-checkout-block {
+    padding: 12px;
+  }
+
+  .storefront .shipping-options button {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .storefront .shipping-options button small {
+    text-align: left;
+  }
+}
+
+/* Checkout Vitrio: melhorar contraste dos rótulos do endereço */
+.storefront .shipping-checkout-block label {
+  color: #51458f !important;
+  font-weight: 700;
+}
+
+.storefront .shipping-checkout-block label input {
+  color: #172033;
+}
+
+.storefront .shipping-checkout-block label input::placeholder {
+  color: #8791a5;
+  opacity: 1;
+}
